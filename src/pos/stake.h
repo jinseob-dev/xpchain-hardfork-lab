@@ -19,6 +19,10 @@ namespace pos {
 bool IsCoinStakeTx(CTransactionRef tx, const Consensus::Params &consensusParams, uint256 &hashBlock, CTransactionRef& prevTx);
 bool IsDestinationSame(const CScript& prevTxOut, const CScript& coinStakeTxOut);
 
+/** Cold Staking script helper functions */
+CScript CreateColdStakingScript(const CKeyID& stakingKeyId, const CKeyID& ownerKeyId);
+bool IsColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ownerKeyId);
+
 bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<CPubKey>& vPubKeys);
 bool MakeBlockHashExcludedSignature(const CBlock& block, uint256& hashBlock, std::vector<unsigned char>& sig);
 bool CheckBlockSignature(const CBlock& block, const Consensus::Params& consensusParams);

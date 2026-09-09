@@ -542,15 +542,10 @@ BOOST_AUTO_TEST_CASE(coinstake_pubkey_extraction_supported_types)
     }
 }
 
-BOOST_AUTO_TEST_CASE(coinstake_pubkey_extraction_rejects_taproot)
+BOOST_AUTO_TEST_CASE(coinstake_pubkey_extraction_supports_taproot)
 {
-    // A coinstake paying to a v1 witness program yields no public key, so
-    // CheckBlockSignature can never succeed for it and a block staked from a bech32m
-    // output cannot be valid. The wallet's DEFAULT_ADDRESS_TYPE is BECH32M, so coins on
-    // default addresses are not stakeable today -- see doc/xpchain-pos-consensus.md.
-    //
-    // If Taproot staking is ever added, this test must be updated deliberately: it is a
-    // consensus-visible change to the block signature rule.
+    // Taproot staking is supported: a coinstake paying to a v1 witness program yields
+    // an x-only public key for block signature validation.
     CMutableTransaction coinstake;
     coinstake.vin.resize(1);
     coinstake.vout.resize(1);
@@ -562,11 +557,9 @@ BOOST_AUTO_TEST_CASE(coinstake_pubkey_extraction_rejects_taproot)
     BOOST_REQUIRE(type == TX_WITNESS_V1_TAPROOT);
 
     std::vector<CPubKey> keys;
-    BOOST_CHECK(!pos::GetPubKeysFromCoinStakeTx(MakeTransactionRef(coinstake), keys));
+    BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(MakeTransactionRef(coinstake), keys));
+    BOOST_REQUIRE_EQUAL(keys.size(), 1U);
 
-    // The rejection is specific to the block signature rule: the coinstake shape check
-    // itself does accept a Taproot destination, which is why the failure only shows up
-    // once a block has already been assembled.
     BOOST_CHECK(pos::IsDestinationSame(coinstake.vout[0].scriptPubKey, coinstake.vout[0].scriptPubKey));
 }
 
@@ -711,6 +704,81 @@ BOOST_AUTO_TEST_CASE(coinstake_script_flags_follow_block_height)
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(999, consensus) & SCRIPT_VERIFY_TAPROOT) == 0);
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(1000, consensus) & SCRIPT_VERIFY_TAPROOT) != 0);
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(1001, consensus) & SCRIPT_VERIFY_TAPROOT) != 0);
+}
+
+BOOST_AUTO_TEST_CASE(cold_staking_script_and_taproot_staking_tests)
+{
+    // 1. Generate keys for Staker and Owner
+    CKey stakerKey, ownerKey;
+    stakerKey.MakeNewKey(true);
+    ownerKey.MakeNewKey(true);
+
+    CPubKey stakerPubKey = stakerKey.GetPubKey();
+    CPubKey ownerPubKey = ownerKey.GetPubKey();
+
+    const CKeyID stakerKeyId = stakerPubKey.GetID();
+    const CKeyID ownerKeyId = ownerPubKey.GetID();
+
+    // 2. Create Cold Staking Redeem Script
+    CScript coldScript = pos::CreateColdStakingScript(stakerKeyId, ownerKeyId);
+    BOOST_CHECK_EQUAL(coldScript.size(), 53);
+
+    // Verify IsColdStakingScript pattern matching
+    CKeyID parsedStakerId, parsedOwnerId;
+    BOOST_CHECK(pos::IsColdStakingScript(coldScript, parsedStakerId, parsedOwnerId));
+    BOOST_CHECK(parsedStakerId == stakerKeyId);
+    BOOST_CHECK(parsedOwnerId == ownerKeyId);
+
+    // Invalid script should fail pattern match
+    CScript dummyScript = CScript() << OP_DUP << OP_HASH160 << ToByteVector(stakerKeyId) << OP_EQUALVERIFY << OP_CHECKSIG;
+    BOOST_CHECK(!pos::IsColdStakingScript(dummyScript, parsedStakerId, parsedOwnerId));
+
+    // 3. Wrap in P2WSH (SegWit v0 ScriptHash)
+    uint256 coldScriptHash;
+    CSHA256().Write(coldScript.data(), coldScript.size()).Finalize(coldScriptHash.begin());
+    CScript p2wshScript = CScript() << OP_0 << ToByteVector(coldScriptHash);
+
+    // Create a mock coinstake transaction using this P2WSH output
+    CMutableTransaction txCoinStake;
+    txCoinStake.vin.resize(1);
+    txCoinStake.vout.resize(1);
+    txCoinStake.vout[0].scriptPubKey = p2wshScript;
+    txCoinStake.vout[0].nValue = 1000 * COIN;
+
+    // Simulate staking spend: witness stack contains [sig, stakerPubKey, 1, coldScript]
+    std::vector<unsigned char> dummySig(71, 0x30); // dummy DER signature
+    txCoinStake.vin[0].scriptWitness.stack.push_back(dummySig);
+    txCoinStake.vin[0].scriptWitness.stack.push_back(ToByteVector(stakerPubKey));
+    txCoinStake.vin[0].scriptWitness.stack.push_back(std::vector<unsigned char>{0x01}); // OP_TRUE
+    txCoinStake.vin[0].scriptWitness.stack.push_back(ToByteVector(coldScript));
+
+    // Verify that GetPubKeysFromCoinStakeTx successfully extracts the STAKER pubkey (not owner)
+    std::vector<CPubKey> pubkeys;
+    CTransactionRef txRef = MakeTransactionRef(txCoinStake);
+    BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(txRef, pubkeys));
+    BOOST_REQUIRE_EQUAL(pubkeys.size(), 1);
+    BOOST_CHECK(pubkeys[0] == stakerPubKey);
+    BOOST_CHECK(pubkeys[0] != ownerPubKey);
+
+    // 4. Taproot (P2TR) staking test
+    CKey taprootKey;
+    taprootKey.MakeNewKey(true);
+    CPubKey taprootPubKey = taprootKey.GetPubKey();
+    XOnlyPubKey xpubkey(taprootPubKey);
+
+    CScript p2trScript = CScript() << OP_1 << ToByteVector(xpubkey);
+
+    CMutableTransaction txTaprootStake;
+    txTaprootStake.vin.resize(1);
+    txTaprootStake.vout.resize(1);
+    txTaprootStake.vout[0].scriptPubKey = p2trScript;
+    txTaprootStake.vout[0].nValue = 1000 * COIN;
+
+    std::vector<CPubKey> trPubkeys;
+    CTransactionRef txTRRef = MakeTransactionRef(txTaprootStake);
+    BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(txTRRef, trPubkeys));
+    BOOST_REQUIRE_EQUAL(trPubkeys.size(), 1);
+    BOOST_CHECK(XOnlyPubKey(trPubkeys[0]) == xpubkey);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
