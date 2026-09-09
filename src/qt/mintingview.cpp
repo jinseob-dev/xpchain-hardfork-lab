@@ -1,4 +1,5 @@
 #include <qt/mintingview.h>
+#include <qt/coldstakingdialog.h>
 
 #include <qt/xpchainunits.h>
 #include <qt/guiconstants.h>
@@ -28,10 +29,11 @@
 #include <QTableView>
 #include <QVBoxLayout>
 
-MintingView::MintingView(const PlatformStyle *platformStyle, QWidget *parent) :
+MintingView::MintingView(const PlatformStyle *_platformStyle, QWidget *parent) :
     QWidget(parent), model(0), mintingView(0), mintingProxyModel(0),
     guidanceFrame(0), guidanceLabel(0), guidanceButton(0),
-    youngColorSwatch(0), matureColorSwatch(0), oldColorSwatch(0)
+    youngColorSwatch(0), matureColorSwatch(0), oldColorSwatch(0),
+    platformStyle(_platformStyle)
 {
     QHBoxLayout *hlayout = new QHBoxLayout();
     hlayout->setContentsMargins(0,0,0,0);
@@ -66,6 +68,10 @@ MintingView::MintingView(const PlatformStyle *platformStyle, QWidget *parent) :
     legendLayout->addWidget(oldLegend);
     legendLayout->insertStretch(-1);
 
+    QPushButton *coldStakingBtn = new QPushButton(tr("Cold Staking / Delegate..."), this);
+    coldStakingBtn->setToolTip(tr("Generate Cold Staking address or delegate staking coins to a node"));
+    connect(coldStakingBtn, &QPushButton::clicked, this, &MintingView::onColdStakingClicked);
+
     QLabel *mintingLabel = new QLabel(tr("Display staking probability within : "));
     mintingCombo = new QComboBox();
     mintingCombo->addItem(tr("10 min"), Minting10min);
@@ -75,8 +81,8 @@ MintingView::MintingView(const PlatformStyle *platformStyle, QWidget *parent) :
     mintingCombo->addItem(tr("60 days"), Minting60days);
     mintingCombo->setFixedWidth(120);
 
-
-    hlayout->insertStretch(0);
+    hlayout->addWidget(coldStakingBtn);
+    hlayout->insertStretch(1);
     hlayout->addWidget(mintingLabel);
     hlayout->addWidget(mintingCombo);
 
@@ -349,4 +355,11 @@ void MintingView::changeEvent(QEvent *event)
         updateThemeColors();
     }
     QWidget::changeEvent(event);
+}
+
+void MintingView::onColdStakingClicked()
+{
+    if (!model) return;
+    ColdStakingDialog dlg(platformStyle, model, this);
+    dlg.exec();
 }

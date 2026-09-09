@@ -69,6 +69,7 @@ private Q_SLOTS:
     void showHideAddress();
     void showHideTxID();
     void guidanceButtonClicked();
+    void onColdStakingClicked();
 
 Q_SIGNALS:
     void unlockForStakingRequested();
@@ -76,6 +77,9 @@ Q_SIGNALS:
 public Q_SLOTS:
     void exportClicked();
     void chooseMintingInterval(int idx);
+
+private:
+    const PlatformStyle *platformStyle;
 };
 
 #endif // XPCHAIN_QT_MINTINGVIEW_H

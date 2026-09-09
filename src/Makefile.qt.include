@@ -179,6 +179,7 @@ QT_MOC_CPP = \
   qt/moc_mnemonicimportdialog.cpp \
   qt/moc_mnemonicbackupdialog.cpp \
   qt/moc_walletsetupdialog.cpp \
+  qt/moc_coldstakingdialog.cpp \
   qt/moc_importaddressdialog.cpp
 
 XPCHAIN_MM = \
@@ -269,6 +270,7 @@ XPCHAIN_QT_H = \
   qt/mnemonicimportdialog.h \
   qt/mnemonicbackupdialog.h \
   qt/walletsetupdialog.h \
+  qt/coldstakingdialog.h \
   qt/importaddressdialog.h \
   qt/res/bip39_words.h
 
@@ -396,6 +398,7 @@ XPCHAIN_QT_WALLET_CPP = \
   qt/mnemonicimportdialog.cpp \
   qt/mnemonicbackupdialog.cpp \
   qt/walletsetupdialog.cpp \
+  qt/coldstakingdialog.cpp \
   qt/importaddressdialog.cpp
 
 XPCHAIN_QT_CPP = $(XPCHAIN_QT_BASE_CPP)

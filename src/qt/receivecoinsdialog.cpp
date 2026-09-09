@@ -91,12 +91,13 @@ void ReceiveCoinsDialog::setModel(WalletModel *_model)
         tableView->setSelectionMode(QAbstractItemView::ContiguousSelection);
         tableView->setColumnWidth(RecentRequestsTableModel::Date, DATE_COLUMN_WIDTH);
         tableView->setColumnWidth(RecentRequestsTableModel::Label, LABEL_COLUMN_WIDTH);
+        tableView->setColumnWidth(RecentRequestsTableModel::Address, 250);
         tableView->setColumnWidth(RecentRequestsTableModel::Amount, AMOUNT_MINIMUM_COLUMN_WIDTH);
 
         connect(tableView->selectionModel(),
             SIGNAL(selectionChanged(QItemSelection, QItemSelection)), this,
             SLOT(recentRequestsView_selectionChanged(QItemSelection, QItemSelection)));
-        // Last 2 columns are set by the columnResizingFixer, when the table geometry is ready.
+        // Last columns are set by the columnResizingFixer, when the table geometry is ready.
         columnResizingFixer = new GUIUtil::TableViewLastColumnResizingFixer(tableView, AMOUNT_MINIMUM_COLUMN_WIDTH, DATE_COLUMN_WIDTH, this);
 
         // Dynamically populate Address Type ComboBox
@@ -197,9 +198,26 @@ void ReceiveCoinsDialog::on_quickCopyButton_clicked()
             tr("Could not generate a new receiving address."));
         return;
     }
+    ui->lineGeneratedAddress->setText(address);
     GUIUtil::setClipboard(address);
-    QMessageBox::information(this, tr("Address copied"),
-        tr("New receiving address copied to the clipboard:\n%1").arg(address));
+
+    if (model->getRecentRequestsTableModel()) {
+        SendCoinsRecipient info(address, "", 0, "");
+        model->getRecentRequestsTableModel()->addNewRequest(info);
+    }
+
+    QMessageBox::information(this, tr("Address generated & copied"),
+        tr("New receiving address generated and copied to clipboard:\n%1").arg(address));
+}
+
+void ReceiveCoinsDialog::on_btnCopyGenerated_clicked()
+{
+    QString addr = ui->lineGeneratedAddress->text();
+    if (!addr.isEmpty()) {
+        GUIUtil::setClipboard(addr);
+        QMessageBox::information(this, tr("Address copied"),
+            tr("Address copied to clipboard:\n%1").arg(addr));
+    }
 }
 
 void ReceiveCoinsDialog::on_receiveButton_clicked()

@@ -24,7 +24,7 @@ RecentRequestsTableModel::RecentRequestsTableModel(WalletModel *parent) :
         addNewRequest(request);
 
     /* These columns must match the indices in the ColumnIndex enumeration */
-    columns << tr("Date") << tr("Label") << tr("Message") << getAmountTitle();
+    columns << tr("Date") << tr("Label") << tr("Address") << tr("Message") << getAmountTitle();
 
     connect(walletModel->getOptionsModel(), SIGNAL(displayUnitChanged(int)), this, SLOT(updateDisplayUnit()));
 }
@@ -69,6 +69,8 @@ QVariant RecentRequestsTableModel::data(const QModelIndex &index, int role) cons
             {
                 return rec->recipient.label;
             }
+        case Address:
+            return rec->recipient.address;
         case Message:
             if(rec->recipient.message.isEmpty() && role == Qt::DisplayRole)
             {
