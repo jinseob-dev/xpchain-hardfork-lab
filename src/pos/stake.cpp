@@ -124,6 +124,9 @@ bool CheckColdStakingRewardOutputs(const CTransactionRef& txCoinStake,
         return true;
     }
 
+    // Cold-staking v1 has no operator commission: every reward output must
+    // remain under the delegator's original contract. A future commission
+    // model requires a distinct script version and activation rule.
     for (const auto& reward : rewardValues) {
         if (reward.first != txCoinStake->vout[0].scriptPubKey) {
             return false;

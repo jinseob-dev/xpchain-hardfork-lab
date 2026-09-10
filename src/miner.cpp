@@ -253,6 +253,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
                     pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
                     // Delegated staking rewards remain protected by the same
                     // owner/staker contract, regardless of local payout settings.
+                    // Operator commission is intentionally not part of the v1
+                    // testnet contract. If introduced later, it must use a new
+                    // versioned script and separately reviewed consensus rules.
                     rewardPct = {{defaultDest, 100}};
                 }
                 std::vector<std::pair<CScript, CAmount>> rewardValue;
