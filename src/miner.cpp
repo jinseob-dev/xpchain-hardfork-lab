@@ -248,6 +248,13 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
                     return nullptr;
                 }
                 std::vector<std::pair<CTxDestination, int>> rewardPct = pwallet->GetRewardPct(defaultDest);
+                CKeyID stakingKey, ownerKey;
+                if (nHeight >= chainparams.GetConsensus().ColdStakingHeight &&
+                    pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
+                    // Delegated staking rewards remain protected by the same
+                    // owner/staker contract, regardless of local payout settings.
+                    rewardPct = {{defaultDest, 100}};
+                }
                 std::vector<std::pair<CScript, CAmount>> rewardValue;
                 rewardValue.resize(rewardPct.size());
                 for (size_t i = 0; i < rewardPct.size(); i++) {

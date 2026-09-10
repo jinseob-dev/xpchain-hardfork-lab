@@ -17,14 +17,19 @@
 #include <amount.h>
 #include <arith_uint256.h>
 #include <chainparams.h>
+#include <consensus/merkle.h>
 #include <hash.h>
 #include <key.h>
+#include <keystore.h>
+#include <policy/policy.h>
 #include <pos/height.h>
 #include <pos/kernel.h>
 #include <pos/reward.h>
 #include <pos/stake.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
+#include <script/ismine.h>
+#include <script/sign.h>
 #include <script/standard.h>
 #include <uint256.h>
 #include <validation.h>
@@ -561,6 +566,52 @@ BOOST_AUTO_TEST_CASE(coinstake_pubkey_extraction_supports_taproot)
     BOOST_REQUIRE_EQUAL(keys.size(), 1U);
 
     BOOST_CHECK(pos::IsDestinationSame(coinstake.vout[0].scriptPubKey, coinstake.vout[0].scriptPubKey));
+
+    Consensus::Params consensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
+    consensus.TaprootHeight = 1000;
+    keys.clear();
+    BOOST_CHECK(!pos::GetPubKeysFromCoinStakeTx(MakeTransactionRef(coinstake), keys, 999, consensus));
+    BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(MakeTransactionRef(coinstake), keys, 1000, consensus));
+}
+
+BOOST_AUTO_TEST_CASE(taproot_block_signature_is_schnorr_and_height_gated)
+{
+    const CKey key = MakeKey();
+    const XOnlyPubKey outputKey(key.GetPubKey());
+
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vin[0].scriptSig = CScript() << 1000;
+    coinbase.vout.resize(1);
+
+    CMutableTransaction coinstake;
+    coinstake.vin.resize(1);
+    coinstake.vout.emplace_back(1000 * COIN, CScript() << OP_1 << ToByteVector(outputKey));
+
+    CBlock block;
+    block.nVersion = 1;
+    block.nTime = 1700000000;
+    block.nBits = 0x207fffff;
+    block.vtx = {MakeTransactionRef(coinbase), MakeTransactionRef(coinstake)};
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    std::vector<unsigned char> signature;
+    BOOST_REQUIRE(key.SignSchnorr(block.GetBlockHeader().GetHash(), signature));
+    coinbase.vin[0].scriptSig << signature;
+    block.vtx[0] = MakeTransactionRef(coinbase);
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    Consensus::Params consensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
+    consensus.TaprootHeight = 1000;
+    BOOST_CHECK(!pos::CheckBlockSignature(block, 999, consensus));
+    BOOST_CHECK(pos::CheckBlockSignature(block, 1000, consensus));
+
+    signature[0] ^= 1;
+    CMutableTransaction badCoinbase(*block.vtx[0]);
+    badCoinbase.vin[0].scriptSig = CScript() << 1000 << signature;
+    block.vtx[0] = MakeTransactionRef(badCoinbase);
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+    BOOST_CHECK(!pos::CheckBlockSignature(block, 1000, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(reward_hash_preimage_layout)
@@ -700,10 +751,124 @@ BOOST_AUTO_TEST_CASE(coinstake_script_flags_follow_block_height)
 {
     Consensus::Params consensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
     consensus.TaprootHeight = 1000;
+    consensus.ColdStakingHeight = 2000;
 
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(999, consensus) & SCRIPT_VERIFY_TAPROOT) == 0);
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(1000, consensus) & SCRIPT_VERIFY_TAPROOT) != 0);
     BOOST_CHECK((pos::GetCoinStakeScriptFlags(1001, consensus) & SCRIPT_VERIFY_TAPROOT) != 0);
+    BOOST_CHECK((pos::GetCoinStakeScriptFlags(1999, consensus) & SCRIPT_VERIFY_COLDSTAKE) == 0);
+    BOOST_CHECK((pos::GetCoinStakeScriptFlags(2000, consensus) & SCRIPT_VERIFY_COLDSTAKE) != 0);
+}
+
+BOOST_AUTO_TEST_CASE(cold_staking_staker_path_preserves_contract_and_principal)
+{
+    const CKey stakerKey = MakeKey();
+    const CKey ownerKey = MakeKey();
+    const CScript coldScript = pos::CreateColdStakingScript(stakerKey.GetPubKey().GetID(), ownerKey.GetPubKey().GetID());
+    const CScript contract = GetScriptForDestination(WitnessV0ScriptHash(coldScript));
+    const CAmount principal = 1000 * COIN;
+
+    CMutableTransaction spend;
+    spend.vin.resize(1);
+    spend.vout.resize(1);
+    spend.vout[0] = CTxOut(principal, contract);
+
+    const uint256 sighash = SignatureHash(coldScript, spend, 0, SIGHASH_ALL, principal, SigVersion::WITNESS_V0);
+    std::vector<unsigned char> sig;
+    BOOST_REQUIRE(stakerKey.Sign(sighash, sig));
+    sig.push_back(SIGHASH_ALL);
+    spend.vin[0].scriptWitness.stack = {
+        sig, ToByteVector(stakerKey.GetPubKey()), {0x01}, ToByteVector(coldScript)
+    };
+
+    const auto verifies = [&](const CMutableTransaction& tx, unsigned int flags) {
+        ScriptError error = SCRIPT_ERR_UNKNOWN_ERROR;
+        return VerifyScript(CScript(), contract, &tx.vin[0].scriptWitness,
+                            SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | flags,
+                            MutableTransactionSignatureChecker(&tx, 0, principal), &error);
+    };
+
+    BOOST_CHECK(verifies(spend, SCRIPT_VERIFY_COLDSTAKE));
+
+    Consensus::Params consensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
+    consensus.ColdStakingHeight = 1000;
+    const CTransactionRef coldStake = MakeTransactionRef(spend);
+    const std::vector<std::pair<CScript, CAmount>> protectedReward{{contract, 1 * COIN}};
+    const std::vector<std::pair<CScript, CAmount>> redirectedReward{{P2PKH(stakerKey), 1 * COIN}};
+    BOOST_CHECK(pos::CheckColdStakingRewardOutputs(coldStake, protectedReward, 1000, consensus));
+    BOOST_CHECK(!pos::CheckColdStakingRewardOutputs(coldStake, redirectedReward, 1000, consensus));
+    BOOST_CHECK(pos::CheckColdStakingRewardOutputs(coldStake, redirectedReward, 999, consensus));
+
+    CMutableTransaction stolen = spend;
+    stolen.vout[0].scriptPubKey = P2PKH(stakerKey);
+    BOOST_CHECK(!MutableTransactionSignatureChecker(&stolen, 0, principal).CheckColdStake(coldScript));
+    std::vector<unsigned char> stolenSig;
+    BOOST_REQUIRE(stakerKey.Sign(SignatureHash(coldScript, stolen, 0, SIGHASH_ALL, principal, SigVersion::WITNESS_V0), stolenSig));
+    stolenSig.push_back(SIGHASH_ALL);
+    stolen.vin[0].scriptWitness.stack[0] = stolenSig;
+
+    CMutableTransaction reduced = spend;
+    reduced.vout[0].nValue -= 1;
+    BOOST_CHECK(!MutableTransactionSignatureChecker(&reduced, 0, principal).CheckColdStake(coldScript));
+
+    CMutableTransaction split = spend;
+    split.vout.push_back(CTxOut(1, P2PKH(stakerKey)));
+    BOOST_CHECK(!MutableTransactionSignatureChecker(&split, 0, principal).CheckColdStake(coldScript));
+
+    // Before activation OP_CHECKCOLDSTAKEVERIFY retains its historical NOP meaning.
+    BOOST_CHECK(verifies(stolen, SCRIPT_VERIFY_NONE));
+}
+
+BOOST_AUTO_TEST_CASE(cold_staking_wallet_recognition_and_role_signing)
+{
+    const CKey stakerKey = MakeKey();
+    const CKey ownerKey = MakeKey();
+    const CScript coldScript = pos::CreateColdStakingScript(stakerKey.GetPubKey().GetID(), ownerKey.GetPubKey().GetID());
+    const CScript contract = GetScriptForDestination(WitnessV0ScriptHash(coldScript));
+    const CAmount principal = 1000 * COIN;
+
+    CMutableTransaction funding;
+    funding.vout.emplace_back(principal, contract);
+    const CTransaction fundingTx(funding);
+
+    CBasicKeyStore stakerStore;
+    BOOST_REQUIRE(stakerStore.AddKey(stakerKey));
+    BOOST_REQUIRE(stakerStore.AddCScript(coldScript));
+    BOOST_REQUIRE(stakerStore.AddCScript(contract));
+    BOOST_CHECK(IsMine(stakerStore, contract) == ISMINE_SPENDABLE);
+
+    CMutableTransaction coinstake;
+    coinstake.vin.emplace_back(COutPoint(fundingTx.GetHash(), 0));
+    coinstake.vout.emplace_back(principal, contract);
+    BOOST_REQUIRE(SignSignature(stakerStore, fundingTx, coinstake, 0, SIGHASH_ALL));
+    BOOST_REQUIRE_EQUAL(coinstake.vin[0].scriptWitness.stack.size(), 4U);
+    BOOST_CHECK(coinstake.vin[0].scriptWitness.stack[2] == std::vector<unsigned char>{0x01});
+
+    CMutableTransaction theft;
+    theft.vin.emplace_back(COutPoint(fundingTx.GetHash(), 0));
+    theft.vout.emplace_back(principal - 1000, P2PKH(stakerKey));
+    BOOST_CHECK(!SignSignature(stakerStore, fundingTx, theft, 0, SIGHASH_ALL));
+
+    CBasicKeyStore ownerStore;
+    BOOST_REQUIRE(ownerStore.AddKey(ownerKey));
+    BOOST_REQUIRE(ownerStore.AddKey(stakerKey));
+    BOOST_REQUIRE(ownerStore.AddCScript(coldScript));
+    BOOST_REQUIRE(ownerStore.AddCScript(contract));
+    BOOST_CHECK(IsMine(ownerStore, contract) == ISMINE_SPENDABLE);
+
+    CMutableTransaction combinedStake;
+    combinedStake.vin.emplace_back(COutPoint(fundingTx.GetHash(), 0));
+    combinedStake.vout.emplace_back(principal, contract);
+    BOOST_REQUIRE(SignSignature(ownerStore, fundingTx, combinedStake, 0, SIGHASH_ALL));
+    BOOST_REQUIRE_EQUAL(combinedStake.vin[0].scriptWitness.stack.size(), 4U);
+    BOOST_CHECK(combinedStake.vin[0].scriptWitness.stack[2] == std::vector<unsigned char>{0x01});
+
+    CMutableTransaction withdrawal;
+    withdrawal.vin.emplace_back(COutPoint(fundingTx.GetHash(), 0));
+    withdrawal.vout.emplace_back(principal - 1000, P2PKH(ownerKey));
+    BOOST_REQUIRE(SignSignature(ownerStore, fundingTx, withdrawal, 0, SIGHASH_ALL));
+    BOOST_REQUIRE_EQUAL(withdrawal.vin[0].scriptWitness.stack.size(), 4U);
+    BOOST_CHECK(withdrawal.vin[0].scriptWitness.stack[2].empty());
 }
 
 BOOST_AUTO_TEST_CASE(cold_staking_script_and_taproot_staking_tests)
@@ -721,7 +886,7 @@ BOOST_AUTO_TEST_CASE(cold_staking_script_and_taproot_staking_tests)
 
     // 2. Create Cold Staking Redeem Script
     CScript coldScript = pos::CreateColdStakingScript(stakerKeyId, ownerKeyId);
-    BOOST_CHECK_EQUAL(coldScript.size(), 53);
+    BOOST_CHECK_EQUAL(coldScript.size(), 54U);
 
     // Verify IsColdStakingScript pattern matching
     CKeyID parsedStakerId, parsedOwnerId;
@@ -756,9 +921,15 @@ BOOST_AUTO_TEST_CASE(cold_staking_script_and_taproot_staking_tests)
     std::vector<CPubKey> pubkeys;
     CTransactionRef txRef = MakeTransactionRef(txCoinStake);
     BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(txRef, pubkeys));
-    BOOST_REQUIRE_EQUAL(pubkeys.size(), 1);
+    BOOST_REQUIRE_EQUAL(pubkeys.size(), 1U);
     BOOST_CHECK(pubkeys[0] == stakerPubKey);
     BOOST_CHECK(pubkeys[0] != ownerPubKey);
+
+    Consensus::Params gatedConsensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
+    gatedConsensus.ColdStakingHeight = 1000;
+    pubkeys.clear();
+    BOOST_CHECK(!pos::GetPubKeysFromCoinStakeTx(txRef, pubkeys, 999, gatedConsensus));
+    BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(txRef, pubkeys, 1000, gatedConsensus));
 
     // 4. Taproot (P2TR) staking test
     CKey taprootKey;
@@ -777,7 +948,7 @@ BOOST_AUTO_TEST_CASE(cold_staking_script_and_taproot_staking_tests)
     std::vector<CPubKey> trPubkeys;
     CTransactionRef txTRRef = MakeTransactionRef(txTaprootStake);
     BOOST_CHECK(pos::GetPubKeysFromCoinStakeTx(txTRRef, trPubkeys));
-    BOOST_REQUIRE_EQUAL(trPubkeys.size(), 1);
+    BOOST_REQUIRE_EQUAL(trPubkeys.size(), 1U);
     BOOST_CHECK(XOnlyPubKey(trPubkeys[0]) == xpubkey);
 }
 

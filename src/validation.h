@@ -403,7 +403,7 @@ bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus
 bool ReadRawBlockFromDisk(std::vector<uint8_t>& block, const CDiskBlockPos& pos, const CMessageHeader::MessageStartChars& message_start);
 bool ReadRawBlockFromDisk(std::vector<uint8_t>& block, const CBlockIndex* pindex, const CMessageHeader::MessageStartChars& message_start);
 
-bool CheckBlockSignature(const CBlock& block, CValidationState& state, const Consensus::Params& consensusParams);
+bool CheckBlockSignature(const CBlock& block, CValidationState& state, int nHeight, const Consensus::Params& consensusParams);
 /** Functions for validating blocks and updating the block tree */
 
 /** Context-independent validity checks */
@@ -510,6 +510,6 @@ inline bool IsBlockPruned(const CBlockIndex* pblockindex)
     return (fHavePruned && !(pblockindex->nStatus & BLOCK_HAVE_DATA) && pblockindex->nTx > 0);
 }
 
-bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state);
+bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state, int nHeight, const Consensus::Params& consensusParams);
 
 #endif // XPCHAIN_VALIDATION_H

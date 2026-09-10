@@ -207,6 +207,7 @@ public:
 
     interfaces::Node& node() const { return m_node; }
     interfaces::Wallet& wallet() const { return *m_wallet; }
+    int getNumBlocks() const;
 
     QString getWalletName() const;
     bool isLegacy() const;

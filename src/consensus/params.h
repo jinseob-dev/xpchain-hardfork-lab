@@ -63,6 +63,8 @@ struct Params {
     int BIP66Height;
     /** Block height at which Taproot (BIP341, BIP342) becomes active */
     int TaprootHeight;
+    /** Block height at which delegated cold-staking covenant rules become active */
+    int ColdStakingHeight;
     /**
      * Minimum blocks including miner confirmation of the total of 2016 blocks in a retargeting period,
      * (nPowTargetTimespan / nPowTargetSpacing) which is also used for BIP9 deployments.

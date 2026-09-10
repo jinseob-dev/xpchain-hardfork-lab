@@ -12,6 +12,7 @@
 #include <qt/xpchainunits.h>
 
 #include <wallet/coincontrol.h>
+#include <chainparams.h>
 #include <outputtype.h>
 #include <key_io.h>
 #include <pos/stake.h>
@@ -169,6 +170,11 @@ void ColdStakingDialog::setupUI()
 
 void ColdStakingDialog::onGenerateAddressClicked()
 {
+    if (!model || model->getNumBlocks() + 1 < Params().GetConsensus().ColdStakingHeight) {
+        labelStatus->setStyleSheet("color: #f85149;");
+        labelStatus->setText(tr("Cold staking activates at block %1.").arg(Params().GetConsensus().ColdStakingHeight));
+        return;
+    }
     QString ownerStr = editOwnerAddress->text().trimmed();
     QString stakerStr = editStakerAddress->text().trimmed();
 
@@ -210,6 +216,12 @@ void ColdStakingDialog::onGenerateAddressClicked()
     }
 
     CScript script = pos::CreateColdStakingScript(stakerKeyId, ownerKeyId);
+    const CScript witnessProgram = GetScriptForDestination(WitnessV0ScriptHash(script));
+    if (!model || !model->wallet().addScript(script) || !model->wallet().addScript(witnessProgram)) {
+        labelStatus->setStyleSheet("color: #f85149;");
+        labelStatus->setText(tr("Failed to save the cold staking contract in this wallet."));
+        return;
+    }
     std::string coldAddr = EncodeDestination(WitnessV0ScriptHash(script));
 
     QString qAddr = QString::fromStdString(coldAddr);
@@ -239,6 +251,12 @@ void ColdStakingDialog::onDelegateClicked()
 {
     if (!model) return;
 
+    if (model->getNumBlocks() + 1 < Params().GetConsensus().ColdStakingHeight) {
+        labelDelegateStatus->setStyleSheet("color: #f85149;");
+        labelDelegateStatus->setText(tr("Cold staking activates at block %1.").arg(Params().GetConsensus().ColdStakingHeight));
+        return;
+    }
+
     QString addr = editDelegateAddress->text().trimmed();
     QString amountStr = editDelegateAmount->text().trimmed();
 
@@ -259,6 +277,11 @@ void ColdStakingDialog::onDelegateClicked()
     if (!IsValidDestination(dest)) {
         labelDelegateStatus->setStyleSheet("color: #f85149;");
         labelDelegateStatus->setText(tr("Invalid delegation address."));
+        return;
+    }
+    if (!model->wallet().isColdStakingDestination(dest)) {
+        labelDelegateStatus->setStyleSheet("color: #f85149;");
+        labelDelegateStatus->setText(tr("This wallet does not contain the redeem script for that cold staking address."));
         return;
     }
 

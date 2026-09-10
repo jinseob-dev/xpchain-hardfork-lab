@@ -127,6 +127,14 @@ IsMineResult IsMineInner(const LegacyScriptPubKeyMan& ks,
         break;
     }
 
+    case TX_COLDSTAKE:
+        if (sv != IsMineSigVersion::WITNESS_V0) return IsMineResult::INVALID;
+        if (ks.HaveKey(CKeyID(uint160(vSols[0]))) ||
+            ks.HaveKey(CKeyID(uint160(vSols[1])))) {
+            ret = std::max(ret, IsMineResult::SPENDABLE);
+        }
+        break;
+
     case TX_PUBKEY:
         keyID = CPubKey(vSols[0]).GetID();
         if (!PermitsUncompressed(sv) && vSols[0].size() != 33)

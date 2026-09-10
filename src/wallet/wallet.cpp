@@ -11,6 +11,7 @@
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
+#include <crypto/ripemd160.h>
 #include <pos/reward.h>
 #include <pos/stakeable_wallet.h>
 #include <fs.h>
@@ -4690,8 +4691,41 @@ void CWallet::GetStakeCandidates(std::vector<pos::StakeCandidate>& vCandidates)
 
 bool CWallet::CreateCoinStake(const pos::StakeCandidate& candidate, CTransactionRef& txNew, CAmount& nFees)
 {
+    LOCK2(cs_main, cs_wallet);
+
     CCoinControl coin_control;
     coin_control.m_feerate = minRelayTxFee;
+    bool isColdStake = false;
+    txnouttype candidateType;
+    std::vector<std::vector<unsigned char>> candidateSolutions;
+    if (Solver(candidate.txout.scriptPubKey, candidateType, candidateSolutions) &&
+        candidateType == TX_WITNESS_V0_SCRIPTHASH && candidateSolutions.size() == 1) {
+        uint160 scriptId;
+        CRIPEMD160().Write(candidateSolutions[0].data(), candidateSolutions[0].size()).Finalize(scriptId.begin());
+        CScript witnessScript;
+        CKeyID stakingKey, ownerKey;
+        if (GetCScript(CScriptID(scriptId), witnessScript) &&
+            pos::IsColdStakingScript(witnessScript, stakingKey, ownerKey)) {
+            isColdStake = true;
+        }
+    }
+
+    if (isColdStake) {
+        // A delegated staking spend is a covenant: exactly one input must return
+        // the complete principal to the same contract. Build that transaction
+        // directly because the ordinary wallet transaction builder enforces a
+        // relay fee and would either reduce the principal or reject a zero fee.
+        CMutableTransaction txCoinStake;
+        txCoinStake.vin.emplace_back(candidate.outpoint);
+        txCoinStake.vout.emplace_back(candidate.txout.nValue, candidate.txout.scriptPubKey);
+        if (!SignTransaction(txCoinStake)) {
+            return error("%s: Signing delegated stake failed", __func__);
+        }
+        txNew = MakeTransactionRef(std::move(txCoinStake));
+        nFees = 0;
+        return true;
+    }
+
     coin_control.fOverrideFeeRate = true;
     coin_control.Select(candidate.outpoint);
 
@@ -4700,12 +4734,9 @@ bool CWallet::CreateCoinStake(const pos::StakeCandidate& candidate, CTransaction
     std::vector<CRecipient> vecSend;
     std::string strError;
     vecSend.push_back(recipient);
-    {
-        LOCK2(cs_main, cs_wallet);
-        CReserveKey reserve_key(this);
-        if (!CreateTransaction(vecSend, txNew, reserve_key, nFees, nChangePosRet, strError, coin_control, true, true))
-            return error("%s: %s", __func__, strError);
-    }
+    CReserveKey reserve_key(this);
+    if (!CreateTransaction(vecSend, txNew, reserve_key, nFees, nChangePosRet, strError, coin_control, true, true))
+        return error("%s: %s", __func__, strError);
     return true;
 }
 
@@ -4719,16 +4750,37 @@ bool CWallet::SignReward(uint32_t nTime, CTransactionRef txCoinStake,
         LogPrintf("solver failed\n");
         return false;
     }
-    if (type == TX_WITNESS_V0_SCRIPTHASH || type == TX_MULTISIG || type == TX_PUBKEY) {
+    if (type == TX_MULTISIG || type == TX_PUBKEY) {
         return false;
     }
-    CTxDestination dest;
-    if (!ExtractDestination(txCoinStake->vout[0].scriptPubKey, dest)) {
-        LogPrintf("address not found\n");
-        return false;
+    CKeyID keyID;
+    bool schnorr = false;
+    if (type == TX_WITNESS_V0_SCRIPTHASH) {
+        if (txCoinStake->vin.empty() || txCoinStake->vin[0].scriptWitness.stack.empty()) return false;
+        const std::vector<unsigned char>& rawScript = txCoinStake->vin[0].scriptWitness.stack.back();
+        const CScript witnessScript(rawScript.begin(), rawScript.end());
+        CKeyID ownerKey;
+        if (!pos::IsColdStakingScript(witnessScript, keyID, ownerKey)) return false;
+    } else if (type == TX_WITNESS_V1_TAPROOT && ret.size() == 1) {
+        const XOnlyPubKey outputKey(ret[0]);
+        const CPubKey evenKey = outputKey.GetCorrespondingPubKey();
+        if (HaveKey(evenKey.GetID())) {
+            keyID = evenKey.GetID();
+        } else {
+            std::vector<unsigned char> oddBytes{0x03};
+            oddBytes.insert(oddBytes.end(), outputKey.begin(), outputKey.end());
+            const CPubKey oddKey(oddBytes.begin(), oddBytes.end());
+            if (HaveKey(oddKey.GetID())) keyID = oddKey.GetID();
+        }
+        schnorr = true;
+    } else {
+        CTxDestination dest;
+        if (!ExtractDestination(txCoinStake->vout[0].scriptPubKey, dest)) {
+            LogPrintf("address not found\n");
+            return false;
+        }
+        keyID = GetKeyForDestination(*this, dest);
     }
-
-    CKeyID keyID = GetKeyForDestination(*this, dest);
     if (keyID.IsNull()) {
         LogPrintf("pubkey hash not found\n");
         return false;
@@ -4743,7 +4795,7 @@ bool CWallet::SignReward(uint32_t nTime, CTransactionRef txCoinStake,
     CPubKey pubkey = key.GetPubKey();
     std::vector<unsigned char> vchSig;
     uint256 hash = pos::GetRewardHash(vValues, txCoinStake, nTime);
-    bool result = key.Sign(hash, vchSig, 0);
+    bool result = schnorr ? key.SignSchnorr(hash, vchSig) : key.Sign(hash, vchSig, 0);
 
     script = CScript() << OP_RETURN << CScriptNum((int64_t)vValues.size()) << vchSig << ToByteVector(pubkey);
     if (!result) {
@@ -4763,6 +4815,36 @@ bool CWallet::SignBlock(CBlock* pblock) const
         return false;
     }
     std::vector<unsigned char> sig;
+
+    txnouttype stakeType;
+    std::vector<std::vector<unsigned char>> stakeSolutions;
+    if (Solver(pblock->vtx[1]->vout[0].scriptPubKey, stakeType, stakeSolutions) &&
+        stakeType == TX_WITNESS_V1_TAPROOT && stakeSolutions.size() == 1) {
+        const XOnlyPubKey outputKey(stakeSolutions[0]);
+        for (const CPubKey& pubkey : vPubKeys) {
+            CKey privkey;
+            if (GetKey(pubkey.GetID(), privkey) && XOnlyPubKey(privkey.GetPubKey()) == outputKey &&
+                privkey.SignSchnorr(pblock->GetBlockHeader().GetHash(), sig)) {
+                coinbaseTx.vin[0].scriptSig = coinbaseTx.vin[0].scriptSig << sig;
+                pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
+                pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+                return true;
+            }
+
+            std::vector<unsigned char> oddKey{0x03};
+            oddKey.insert(oddKey.end(), outputKey.begin(), outputKey.end());
+            const CPubKey oddPubKey(oddKey.begin(), oddKey.end());
+            if (GetKey(oddPubKey.GetID(), privkey) && XOnlyPubKey(privkey.GetPubKey()) == outputKey &&
+                privkey.SignSchnorr(pblock->GetBlockHeader().GetHash(), sig)) {
+                coinbaseTx.vin[0].scriptSig = coinbaseTx.vin[0].scriptSig << sig;
+                pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
+                pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+                return true;
+            }
+        }
+        return false;
+    }
+
     for (const CPubKey& pubkey : vPubKeys) {
         CKey privkey;
         if (GetKey(pubkey.GetID(), privkey)) {

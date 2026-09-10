@@ -62,6 +62,11 @@ WalletModel::~WalletModel()
     unsubscribeFromCoreSignals();
 }
 
+int WalletModel::getNumBlocks() const
+{
+    return m_node.getNumBlocks();
+}
+
 void WalletModel::updateStatus()
 {
     EncryptionStatus newEncryptionStatus = getEncryptionStatus();

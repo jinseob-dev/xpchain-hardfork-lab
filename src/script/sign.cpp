@@ -214,6 +214,28 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         return true;
     }
 
+    case TX_COLDSTAKE: {
+        const CKeyID stakingKey{uint160(vSolutions[0])};
+        const CKeyID ownerKey{uint160(vSolutions[1])};
+        CKeyID signingKey;
+        bool stakingPath = false;
+        if (provider.HaveKey(stakingKey) && creator.Checker().CheckColdStake(scriptPubKey)) {
+            signingKey = stakingKey;
+            stakingPath = true;
+        } else if (provider.HaveKey(ownerKey)) {
+            signingKey = ownerKey;
+        } else {
+            return false;
+        }
+        if (!CreateSig(creator, sigdata, provider, sig, signingKey, scriptPubKey, sigversion)) return false;
+        CPubKey pubkey;
+        if (!GetPubKey(provider, sigdata, signingKey, pubkey)) return false;
+        ret.push_back(std::move(sig));
+        ret.push_back(ToByteVector(pubkey));
+        ret.push_back(stakingPath ? valtype{0x01} : valtype{});
+        return true;
+    }
+
     default:
         return false;
     }
@@ -491,6 +513,7 @@ class DummySignatureChecker final : public BaseSignatureChecker
 public:
     DummySignatureChecker() {}
     bool CheckSig(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const override { return true; }
+    bool CheckColdStake(const CScript& scriptCode) const override { return true; }
 };
 const DummySignatureChecker DUMMY_CHECKER;
 

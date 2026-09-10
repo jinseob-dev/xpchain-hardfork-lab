@@ -160,6 +160,14 @@ IsMineResult IsMineInner(const CKeyStore& keystore, const CScript& scriptPubKey,
         break;
     }
 
+    case TX_COLDSTAKE:
+        if (sigversion != IsMineSigVersion::WITNESS_V0) return IsMineResult::INVALID;
+        if (keystore.HaveKey(CKeyID(uint160(vSolutions[0]))) ||
+            keystore.HaveKey(CKeyID(uint160(vSolutions[1])))) {
+            ret = std::max(ret, IsMineResult::SPENDABLE);
+        }
+        break;
+
     case TX_MULTISIG:
     {
         // Never treat bare multisig outputs as ours (they can still be made watchonly-though)

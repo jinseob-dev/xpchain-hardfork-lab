@@ -53,15 +53,17 @@ class PoSStakingTest(BitcoinTestFramework):
         self.setup_nodes()
         connect_nodes(self.nodes[0], 1)
 
-    def mine_pow_range(self, address):
+    def mine_pow_range(self, taproot_address, cold_address):
         """Mine heights 1..nSwitchHeight, which is the whole proof-of-work range."""
         self.log.info("Mining the proof-of-work range up to height %d", REGTEST_SWITCH_HEIGHT)
         # generatetoaddress is capped per call by the RPC's own retry budget, so mine in
         # chunks to keep each call short.
-        remaining = REGTEST_SWITCH_HEIGHT
+        taproot_blocks = 200
+        self.nodes[0].generatetoaddress(taproot_blocks, taproot_address)
+        remaining = REGTEST_SWITCH_HEIGHT - taproot_blocks
         while remaining > 0:
             batch = min(remaining, 250)
-            self.nodes[0].generatetoaddress(batch, address)
+            self.nodes[0].generatetoaddress(batch, cold_address)
             remaining -= batch
         assert_equal(self.nodes[0].getblockcount(), REGTEST_SWITCH_HEIGHT)
         sync_blocks(self.nodes)
@@ -172,27 +174,66 @@ class PoSStakingTest(BitcoinTestFramework):
         """-reindex re-runs CheckBlock/ConnectBlock over the PoS block from disk."""
         self.log.info("Checking that node 1 revalidates the proof-of-stake block after -reindex")
         self.restart_node(1, extra_args=['-txindex', '-minting=0', '-reindex', '-mocktime={}'.format(self.mocktime)])
-        wait_until(lambda: self.nodes[1].getblockcount() == REGTEST_SWITCH_HEIGHT + 1, timeout=300)
+        expected_height = self.nodes[0].getblock(block_hash)['height']
+        wait_until(lambda: self.nodes[1].getblockcount() == expected_height, timeout=300)
         assert_equal(self.nodes[1].getbestblockhash(), block_hash)
         connect_nodes(self.nodes[0], 1)
 
-    def run_test(self):
-        # Stake to a v0 segwit address. The wallet's default address type is bech32m, and
-        # GetPubKeysFromCoinStakeTx has no Taproot case, so a coinstake paying to a
-        # bech32m output can never produce a valid block signature. See
-        # doc/xpchain-pos-consensus.md section 2.3.
-        address = self.nodes[0].getnewaddress("", "bech32")
+    def stake_one_cold_block(self, contract):
+        """Stake on node 1, which has only the delegated staking key."""
+        previous_height = self.nodes[0].getblockcount()
+        tip_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time']
+        mocktime = tip_time + REGTEST_STAKE_MIN_AGE + 300
+        self.mocktime = mocktime
+        for node in self.nodes:
+            node.setmocktime(mocktime)
 
-        self.mine_pow_range(address)
+        self.restart_node(1, extra_args=['-txindex', '-minting=1', '-mocktime={}'.format(mocktime)])
+        connect_nodes(self.nodes[0], 1)
+        self.nodes[1].setmocktime(mocktime)
+        wait_until(lambda: self.nodes[1].getblockcount() > previous_height, timeout=180)
+        block_hash = self.nodes[1].getblockhash(previous_height + 1)
+
+        self.restart_node(1, extra_args=['-txindex', '-minting=0', '-mocktime={}'.format(mocktime)])
+        connect_nodes(self.nodes[0], 1)
+        sync_blocks(self.nodes)
+
+        block = self.nodes[0].getblock(block_hash, 2)
+        coinstake = block['tx'][1]
+        assert_equal(coinstake['vout'][0]['scriptPubKey']['addresses'], [contract['address']])
+        reward_outputs = block['tx'][0]['vout'][1:-1]
+        assert reward_outputs
+        for output in reward_outputs:
+            assert_equal(output['scriptPubKey']['addresses'], [contract['address']])
+        witness = coinstake['vin'][0]['txinwitness']
+        assert_equal(witness[-2], '01')
+        assert_equal(witness[-1], contract['redeemScript'])
+        prev = self.nodes[0].getrawtransaction(coinstake['vin'][0]['txid'], True)
+        assert_equal(prev['vout'][coinstake['vin'][0]['vout']]['value'], coinstake['vout'][0]['value'])
+        return block_hash
+
+    def run_test(self):
+        # Node 0 owns Taproot coins. Node 1 imports only the staking half of a
+        # cold contract; node 0 deliberately does not import that contract.
+        address = self.nodes[0].getnewaddress("", "bech32m")
+        owner_address = self.nodes[0].getnewaddress("owner", "bech32")
+        staker_address = self.nodes[1].getnewaddress("staker", "bech32")
+        contract = self.nodes[1].createcoldstakingaddress(owner_address, staker_address)
+        assert_equal(self.nodes[1].getaddressinfo(contract['address'])['ismine'], True)
+        assert_equal(self.nodes[0].getaddressinfo(contract['address'])['ismine'], False)
+
+        self.mine_pow_range(address, contract['address'])
         self.assert_pow_rejected_above_switch(address)
 
         staked_hash = self.stake_one_block()
         self.check_pos_block_structure(staked_hash)
         self.check_reward_is_immature()
         self.check_peer_accepts_block(staked_hash)
-        self.check_reindex_revalidates(staked_hash)
 
-        self.log.info("Proof-of-stake switch, staking, propagation and reindex all verified")
+        cold_hash = self.stake_one_cold_block(contract)
+        self.check_reindex_revalidates(cold_hash)
+
+        self.log.info("Taproot and delegated cold staking, propagation and reindex all verified")
 
 
 if __name__ == '__main__':

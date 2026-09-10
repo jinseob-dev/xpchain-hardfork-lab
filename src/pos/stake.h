@@ -22,10 +22,16 @@ bool IsDestinationSame(const CScript& prevTxOut, const CScript& coinStakeTxOut);
 /** Cold Staking script helper functions */
 CScript CreateColdStakingScript(const CKeyID& stakingKeyId, const CKeyID& ownerKeyId);
 bool IsColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ownerKeyId);
+bool IsColdStakingCoinStake(const CTransactionRef& txCoinStake, CKeyID& stakingKeyId, CKeyID& ownerKeyId);
+bool CheckColdStakingRewardOutputs(const CTransactionRef& txCoinStake,
+                                   const std::vector<std::pair<CScript, CAmount>>& rewardValues,
+                                   int nHeight, const Consensus::Params& consensusParams);
 
 bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<CPubKey>& vPubKeys);
+bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<CPubKey>& vPubKeys,
+                               int nHeight, const Consensus::Params& consensusParams);
 bool MakeBlockHashExcludedSignature(const CBlock& block, uint256& hashBlock, std::vector<unsigned char>& sig);
-bool CheckBlockSignature(const CBlock& block, const Consensus::Params& consensusParams);
+bool CheckBlockSignature(const CBlock& block, int nHeight, const Consensus::Params& consensusParams);
 
 } // namespace pos
 

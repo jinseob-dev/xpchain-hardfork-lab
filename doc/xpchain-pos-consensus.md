@@ -94,8 +94,9 @@ PoS 높이의 블록은 다음을 만족해야 한다.
 - `vout[0].nValue == 0`, `vout.back().nValue == 0` (witness commitment)
 - `<출력개수> == vout.size() - 2`
 - `EqualDestination(vtx[1], pubkey)` — pubkey가 코인스테이크 출력의 목적지와 일치
-  (P2SH-P2WPKH / P2PKH / P2WPKH 지원)
-- `pubkey.Verify(GetRewardHash(rewardValues, vtx[1], block.nTime), <서명>)`
+  (P2SH-P2WPKH / P2PKH / P2WPKH, 활성화 후 P2TR 및 콜드 스테이킹 지원)
+- `GetRewardHash(rewardValues, vtx[1], block.nTime)`를 ECDSA로 검증하며,
+  P2TR 코인스테이크는 64바이트 Schnorr 서명도 검증한다
 
 여기서 `rewardValues`는 `vout[1..size]`의 `(scriptPubKey, nValue)` 목록이고,
 
@@ -118,39 +119,34 @@ GetRewardHash := Hash( Σ(scriptPubKey ‖ nValue) ‖ nTime ‖ vtx[1]->vin[0] 
 
 이 방식 덕분에 헤더 포맷이 바닐라로 유지된다. 이식 시 이 성질을 깨지 않아야 한다.
 
-### 2.3 Taproot 출력은 스테이킹할 수 없다 (제품 영향 있음)
+### 2.3 Taproot 스테이킹 (하드포크 활성화 후)
 
-`GetPubKeysFromCoinStakeTx()` → `GetPubKeyFromScript()`(`src/pos/stake.cpp`)가 처리하는
-스크립트 타입은 다음뿐이다.
+`TaprootHeight`부터 `TX_WITNESS_V1_TAPROOT` 코인스테이크가 허용된다. 출력의 32바이트
+x-only 공개키를 블록 서명키로 추출하고, 블록 서명과 다중 수령자 보상 서명을 BIP340
+Schnorr로 생성·검증한다. 활성화 전에는 이 공개키 추출이 실패하므로 과거 블록의 검증 규칙은
+바뀌지 않는다. 지갑은 키의 짝·홀수 공개키 표현을 모두 확인하여 해당 x-only 출력키의
+개인키를 찾는다.
 
-`TX_PUBKEY`, `TX_MULTISIG`, `TX_PUBKEYHASH`, `TX_WITNESS_V0_KEYHASH`,
-`TX_SCRIPTHASH`(재귀), `TX_WITNESS_V0_SCRIPTHASH`(재귀)
+단위 테스트는 활성화 직전 거부, 활성화 높이 수락, 변조된 Schnorr 서명 거부를 고정한다.
+기능 테스트는 실제 bech32m UTXO로 PoS 블록을 생성하고 다른 노드의 수용까지 확인한다.
 
-`TX_WITNESS_V1_TAPROOT`는 `default: return false`로 떨어진다. 따라서
-**코인스테이크 출력이 bech32m(Taproot)이면 `CheckBlockSignature()`가 절대 성공할 수 없고,
-그 블록은 유효할 수 없다.** §2.1의 `EqualDestination()`도 P2SH-P2WPKH / P2PKH / P2WPKH만 안다.
+### 2.4 콜드 스테이킹 (하드포크 활성화 후)
 
-지갑의 기본 주소 타입은 한때 Taproot였고, 그 기본값에는 `TaprootHeight` 활성 여부에 대한
-게이트가 없었다. 즉 `getnewaddress`를 기본값으로 받은 주소의 코인이 스테이킹 불가 상태가
-됐다. 지금은 기본값이 `BECH32`(P2WPKH)이고, `TaprootOutputsProtected()`가 팁에서 Taproot
-규칙이 시행되는지를 판정해 활성화 전에는 bech32m 주소 발급을 거부한다
-(`src/wallet/wallet.cpp`). Taproot 주소로 받은 코인은 활성화 후에도 여전히 스테이킹할 수
-없다는 점은 그대로다 — 그건 아래 P5-5에서 다룬다.
+`ColdStakingHeight`부터 P2WSH 내부에 다음 두 경로를 가진 계약을 사용할 수 있다.
 
-증상이 늦게 드러나는 것도 문제다. 코인스테이크 **구조** 검사(`IsCoinStakeTx`,
-`IsDestinationSame`)는 Taproot 목적지를 정상 수락하므로, 마인터는 커널을 찾고 코인스테이크를
-만들고 블록을 조립한 뒤 서명 단계에서 조용히 실패한다. 로그에는
-`SignStep: CreateSig failed for Taproot` / `pubkey hash not found`만 남는다.
+- 스테이킹 경로: 스테이킹키 서명과 `OP_CHECKCOLDSTAKEVERIFY`를 요구한다. 입력 1개와 출력
+  1개만 허용하고, 출력 스크립트와 금액이 원래 계약·원금과 정확히 같아야 한다.
+- 출금 경로: 출금키 서명으로 일반 지갑 거래를 만들 수 있으며 위 covenant를 적용하지 않는다.
 
-이 제약은 다음 두 로드맵 항목의 선행 조건이다.
+따라서 위임 노드는 보상을 생성할 수 있지만 원금을 다른 주소로 보내거나 일부를 수수료로
+사용할 수 없다. 콜드 코인스테이크 자체의 수수료는 0이며 PoS 보상은 기존과 동일하게
+코인베이스에 생성되되, 모든 보상 출력은 합의 규칙상 동일 콜드 계약으로 돌아가야 한다.
+로컬 보상 분배 설정으로 위임 노드가 보상을 가로챌 수 없다. 계약 생성 RPC는
+`createcoldstakingaddress "owner_address" "staker_address"`이며, 출금 지갑과 스테이킹
+노드가 동일한 witness script를 저장해야 하므로 양쪽에서 실행하는 것이 운영 원칙이다.
 
-- **P3-5 (Taproot 지갑 경로)** — 기본값은 `BECH32`로 되돌렸다. 남은 일은 PoS 서명 경로의
- Taproot 지원이다.
-- **P5-5 (`TaprootHeight` 메인넷 활성 정책)** — PoS 서명 규칙에 Taproot를 추가하는 것은
- **합의 변경**이다. 활성 높이 결정과 함께 다뤄야 한다.
-
-현재 동작은 `src/test/pos_tests.cpp`의 `coinstake_pubkey_extraction_rejects_taproot`가
-고정하고 있다. 지원을 추가하려면 이 테스트를 의도적으로 갱신해야 한다.
+`OP_CHECKCOLDSTAKEVERIFY`는 기존 `OP_NOP10`을 재사용한다. 활성화 전에는 과거와 동일한 NOP,
+활성화 높이부터는 covenant 검사로 동작하므로 과거 체인 재검증 결과를 바꾸지 않는다.
 
 ---
 
@@ -225,8 +221,9 @@ CheckProofOfStake(block.vtx[1], block.nBits, hashProofOfStake, block.nTime, pind
 1. `GetTransaction(vin[0].prevout.hash, txPrev, ..., /*fAllowSlow=*/true)` — 이전 tx와 그 블록 해시
 2. 모든 입력의 이전 출력을 모아 `PrecomputedTransactionData`를 구성
 3. `CScriptCheck(txPrev->vout[n], tx, 0, nFlags, true, &txdata)` — 입력 0의 스크립트 검증
-   - `nFlags = GetCoinStakeScriptFlags(nHeight, params)`: `SCRIPT_VERIFY_NONE`, 단 검증 중인
-     블록의 높이가 `TaprootHeight` 이상이면 `SCRIPT_VERIFY_TAPROOT` 추가
+   - `nFlags = GetCoinStakeScriptFlags(nHeight, params)`: 검증 중인 블록의 높이가
+     `TaprootHeight` 이상이면 `SCRIPT_VERIFY_TAPROOT`, `ColdStakingHeight` 이상이면
+     `SCRIPT_VERIFY_COLDSTAKE` 추가
 4. `mapBlockIndex`에서 이전 블록 인덱스를 찾고 `ReadBlockFromDisk()`로 **블록 전체를 읽음**
 5. `CheckStakeKernelHash(nBits, prevBlock.GetBlockTime(), offset, txPrev->vout[n].nValue, n, block.nTime, ...)`
 
@@ -260,11 +257,11 @@ P1(경계 고정) → P5(수렴) 사이에서 다룬다.
 (`src/pos/kernel.cpp`). 단위 테스트 `coinstake_script_flags_follow_block_height`가 경계를
 고정한다.
 
-| 네트워크 | `TaprootHeight` |
-|---|---|
-| main | 4 200 000 (미도달, 약 2027-04 예상) |
-| test | 0 |
-| regtest | 0 |
+| 네트워크 | `TaprootHeight` | `ColdStakingHeight` |
+|---|---:|---:|
+| main | 4 200 000 | 4 200 000 |
+| test | 0 | 0 |
+| regtest | 0 | 0 |
 
 메인넷 활성 높이는 미래에 있다. 활성화 경계를 지나는 동안 `chainActive.Height() + 1`은
 동기화 진행에 따라 움직이고 `pindex->nHeight`는 고정이므로, 위 수정이 없으면 바로 그
@@ -330,12 +327,12 @@ reward      = (CAmount)( nAmount * GetAnnualRate(nHeight) * coefficient * nAge /
   `nAge ≈ ln((M/B - 1) / (L/M - 1... ))` 지점 이후로는 정확히 1.0으로 고정된다
 - PoS 이전 높이 → 0
 
-### 5.3 부동소수점 합의 (최우선 이식 리스크)
+### 5.3 부동소수점 합의 (이번 하드포크에서는 변경하지 않음)
 
 `GetAnnualRate`는 `double_t`를 반환하고 보상 계산은 `exp()`와 `double` 산술을 쓴다.
 **즉 합의 결과가 컴파일러·libm·최적화 플래그·타깃 아키텍처에 의존한다.**
 현재 트리는 이미 C++17(`configure.ac`의 `AX_CXX_COMPILE_STDCXX([17])`)이지만,
-최신 Bitcoin Core로 갈수록 요구 툴체인이 올라가므로 이 의존성은 반드시 제거해야 한다.
+최신 Bitcoin Core로 갈수록 요구 툴체인이 올라가므로 장기적으로 별도 검토가 필요하다.
 
 다행히 위험은 유한하고 검증 가능하다.
 
@@ -344,7 +341,9 @@ reward      = (CAmount)( nAmount * GetAnnualRate(nHeight) * coefficient * nAge /
 - `GetAnnualRate`가 반환하는 여섯 값(0.10~0.05)은 유리수로 정확히 표현된다.
 - 최종 절단이 정수를 만들므로, 목표는 "같은 정수를 내는 결정적 구현"이다.
 
-로드맵상 이 작업은 **P1 이후 별도 PR**로 분리한다. P0에서는 현재 동작을 골든 벡터로 고정만 한다.
+기존 메인넷 결과와 1사토시까지 완전히 같다는 증명 없이 수식을 바꾸는 위험이 더 크므로,
+이번 콜드 스테이킹·Taproot 하드포크에서는 **보상 수식과 연산 순서를 전혀 변경하지 않는다.**
+정수화는 운영체제별 골든 벡터와 전체 정의역 차분 결과를 확보한 뒤 별도 제안으로 분리한다.
 
 ### 5.4 언더플로 불변식 (리팩터 시 깨지기 쉬움)
 
@@ -408,6 +407,7 @@ PoS 전용 `posLimit`은 없고, 계산된 `nBits`가 §3.3의 커널 해시 목
 | `DEPLOYMENT_CHECK_DUP_TXIN` | 3 | — | ALWAYS_ACTIVE |
 | `BLOCK_SIGNATURE_ADDITION` | 2 | 2019-04-01 ~ 2020-04-01 | ALWAYS_ACTIVE |
 | `DEPLOYMENT_TAPROOT` | — | 높이 기반 (`TaprootHeight`) | 0 |
+| 콜드 스테이킹 | — | 높이 기반 (`ColdStakingHeight`) | 0 |
 
 `DEPLOYMENT_TAPROOT`는 세 네트워크 모두에 설정되어 있지만 **어디서도 읽히지 않는다.** 실제
 게이트는 `TaprootHeight`다. `getblockchaininfo`가 이 배포를 근거로 거짓을 보고하는 문제는

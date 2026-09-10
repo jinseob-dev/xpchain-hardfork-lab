@@ -84,6 +84,7 @@ public:
         // that predate Taproot support accept any spend of a witness v1 output,
         // so the height must stay in the future until the network has upgraded.
         consensus.TaprootHeight = 4200000;
+        consensus.ColdStakingHeight = 4200000;
         consensus.powLimit = uint256S("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 60;
@@ -202,6 +203,7 @@ public:
         consensus.BIP65Height = 0;
         consensus.BIP66Height = 0;
         consensus.TaprootHeight = 0; // Active from genesis on testnet
+        consensus.ColdStakingHeight = 0; // Active from genesis on testnet
         consensus.powLimit = uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 60;
@@ -331,6 +333,7 @@ public:
         consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
 
         consensus.TaprootHeight = 0; // Active from genesis on regtest
+        consensus.ColdStakingHeight = 0; // Active from genesis on regtest
 
         // The best chain should have at least this much work.
         consensus.nMinimumChainWork = uint256S("0x00");

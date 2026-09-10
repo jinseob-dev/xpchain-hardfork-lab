@@ -73,7 +73,8 @@ CScript CreateColdStakingScript(const CKeyID& stakingKeyId, const CKeyID& ownerK
 {
     CScript script;
     script << OP_IF
-           << OP_DUP << OP_HASH160 << ToByteVector(stakingKeyId) << OP_EQUALVERIFY << OP_CHECKSIG
+           << OP_DUP << OP_HASH160 << ToByteVector(stakingKeyId) << OP_EQUALVERIFY
+           << OP_CHECKCOLDSTAKEVERIFY << OP_CHECKSIG
            << OP_ELSE
            << OP_DUP << OP_HASH160 << ToByteVector(ownerKeyId) << OP_EQUALVERIFY << OP_CHECKSIG
            << OP_ENDIF;
@@ -82,25 +83,63 @@ CScript CreateColdStakingScript(const CKeyID& stakingKeyId, const CKeyID& ownerK
 
 bool IsColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ownerKeyId)
 {
-    if (script.size() != 53) return false;
-    const unsigned char* p = script.data();
-    if (p[0] != OP_IF || p[1] != OP_DUP || p[2] != OP_HASH160 || p[3] != 0x14) return false;
-    if (p[24] != OP_EQUALVERIFY || p[25] != OP_CHECKSIG || p[26] != OP_ELSE) return false;
-    if (p[27] != OP_DUP || p[28] != OP_HASH160 || p[29] != 0x14) return false;
-    if (p[50] != OP_EQUALVERIFY || p[51] != OP_CHECKSIG || p[52] != OP_ENDIF) return false;
+    return MatchColdStakingScript(script, stakingKeyId, ownerKeyId);
+}
 
-    stakingKeyId = CKeyID(uint160(std::vector<unsigned char>(p + 4, p + 24)));
-    ownerKeyId = CKeyID(uint160(std::vector<unsigned char>(p + 30, p + 50)));
+bool IsColdStakingCoinStake(const CTransactionRef& txCoinStake, CKeyID& stakingKeyId, CKeyID& ownerKeyId)
+{
+    if (!txCoinStake || txCoinStake->vin.empty() || txCoinStake->vout.empty() ||
+        txCoinStake->vin[0].scriptWitness.stack.empty()) {
+        return false;
+    }
+
+    txnouttype type;
+    std::vector<std::vector<unsigned char>> solutions;
+    if (!Solver(txCoinStake->vout[0].scriptPubKey, type, solutions) ||
+        type != TX_WITNESS_V0_SCRIPTHASH || solutions.size() != 1) {
+        return false;
+    }
+
+    const std::vector<unsigned char>& rawScript = txCoinStake->vin[0].scriptWitness.stack.back();
+    const CScript witnessScript(rawScript.begin(), rawScript.end());
+    if (!IsColdStakingScript(witnessScript, stakingKeyId, ownerKeyId)) {
+        return false;
+    }
+
+    uint256 scriptHash;
+    CSHA256().Write(witnessScript.data(), witnessScript.size()).Finalize(scriptHash.begin());
+    return solutions[0] == ToByteVector(scriptHash);
+}
+
+bool CheckColdStakingRewardOutputs(const CTransactionRef& txCoinStake,
+                                   const std::vector<std::pair<CScript, CAmount>>& rewardValues,
+                                   int nHeight, const Consensus::Params& consensusParams)
+{
+    if (nHeight < consensusParams.ColdStakingHeight) {
+        return true;
+    }
+
+    CKeyID stakingKey, ownerKey;
+    if (!IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
+        return true;
+    }
+
+    for (const auto& reward : rewardValues) {
+        if (reward.first != txCoinStake->vout[0].scriptPubKey) {
+            return false;
+        }
+    }
     return true;
 }
 
-static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::vector<CPubKey>& vPubKey, int depth = 0)
+static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::vector<CPubKey>& vPubKey,
+                                bool allowColdStaking, bool allowTaproot, int depth = 0)
 {
     assert(depth <= 2);
 
     // Check if this script itself is a cold staking redeem script
     CKeyID stakingKeyId, ownerKeyId;
-    if (IsColdStakingScript(scriptPubKey, stakingKeyId, ownerKeyId)) {
+    if (allowColdStaking && IsColdStakingScript(scriptPubKey, stakingKeyId, ownerKeyId)) {
         // Block is staked and signed by the delegate staker key.
         // Check witness stack (for P2WSH cold staking)
         for (const auto& item : txIn.scriptWitness.stack) {
@@ -153,6 +192,9 @@ static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::ve
             break;
         case TX_WITNESS_V1_TAPROOT:
         {
+            if (!allowTaproot) {
+                return false;
+            }
             if (vSolutions.empty() || vSolutions[0].size() != 32) {
                 return false;
             }
@@ -172,7 +214,7 @@ static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::ve
             }
             CScript redeemScript;
             redeemScript = CScript(stack.back().begin(), stack.back().end());
-            if (!GetPubKeyFromScript(redeemScript, txIn, vPubKey, depth + 1)) {
+            if (!GetPubKeyFromScript(redeemScript, txIn, vPubKey, allowColdStaking, allowTaproot, depth + 1)) {
                 return false;
             }
         }
@@ -186,7 +228,7 @@ static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::ve
             }
             CScript redeemScript;
             redeemScript = CScript(stack.back().begin(), stack.back().end());
-            if (!GetPubKeyFromScript(redeemScript, txIn, vPubKey, depth + 1)) {
+            if (!GetPubKeyFromScript(redeemScript, txIn, vPubKey, allowColdStaking, allowTaproot, depth + 1)) {
                 return false;
             }
         }
@@ -199,7 +241,7 @@ static bool GetPubKeyFromScript(CScript scriptPubKey, const CTxIn& txIn, std::ve
 
 bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<CPubKey>& vPubKeys)
 {
-    if (!GetPubKeyFromScript(txCoinStake->vout[0].scriptPubKey, txCoinStake->vin[0], vPubKeys)) {
+    if (!GetPubKeyFromScript(txCoinStake->vout[0].scriptPubKey, txCoinStake->vin[0], vPubKeys, true, true)) {
         return false;
     }
 
@@ -208,6 +250,23 @@ bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<C
             return false;
     }
 
+    return true;
+}
+
+bool GetPubKeysFromCoinStakeTx(const CTransactionRef& txCoinStake, std::vector<CPubKey>& vPubKeys,
+                               int nHeight, const Consensus::Params& consensusParams)
+{
+    if (txCoinStake->vin.empty() || txCoinStake->vout.empty()) {
+        return false;
+    }
+    if (!GetPubKeyFromScript(txCoinStake->vout[0].scriptPubKey, txCoinStake->vin[0], vPubKeys,
+                             nHeight >= consensusParams.ColdStakingHeight,
+                             nHeight >= consensusParams.TaprootHeight)) {
+        return false;
+    }
+    for (const CPubKey& pubkey : vPubKeys) {
+        if (!pubkey.IsValid()) return false;
+    }
     return true;
 }
 
@@ -239,10 +298,10 @@ bool MakeBlockHashExcludedSignature(const CBlock& block, uint256& hashBlock, std
     return true;
 }
 
-bool CheckBlockSignature(const CBlock& block, const Consensus::Params& consensusParams)
+bool CheckBlockSignature(const CBlock& block, int nHeight, const Consensus::Params& consensusParams)
 {
     std::vector<CPubKey> pubkeys;
-    if (!GetPubKeysFromCoinStakeTx(block.vtx[1], pubkeys)) {
+    if (!GetPubKeysFromCoinStakeTx(block.vtx[1], pubkeys, nHeight, consensusParams)) {
         return error("CheckBlockSignature(): could not get the public key");
     }
     uint256 hashBlock;

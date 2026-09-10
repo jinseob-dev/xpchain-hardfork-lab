@@ -42,6 +42,7 @@ const char* GetTxnOutputType(txnouttype t)
     case TX_WITNESS_V0_KEYHASH: return "witness_v0_keyhash";
     case TX_WITNESS_V0_SCRIPTHASH: return "witness_v0_scripthash";
     case TX_WITNESS_V1_TAPROOT: return "witness_v1_taproot";
+    case TX_COLDSTAKE: return "coldstake";
     case TX_WITNESS_UNKNOWN: return "witness_unknown";
     }
     return nullptr;
@@ -67,6 +68,19 @@ static bool MatchPayToPubkeyHash(const CScript& script, valtype& pubkeyhash)
         return true;
     }
     return false;
+}
+
+bool MatchColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ownerKeyId)
+{
+    if (script.size() != 54) return false;
+    const unsigned char* p = script.data();
+    if (p[0] != OP_IF || p[1] != OP_DUP || p[2] != OP_HASH160 || p[3] != 0x14) return false;
+    if (p[24] != OP_EQUALVERIFY || p[25] != OP_CHECKCOLDSTAKEVERIFY || p[26] != OP_CHECKSIG || p[27] != OP_ELSE) return false;
+    if (p[28] != OP_DUP || p[29] != OP_HASH160 || p[30] != 0x14) return false;
+    if (p[51] != OP_EQUALVERIFY || p[52] != OP_CHECKSIG || p[53] != OP_ENDIF) return false;
+    stakingKeyId = CKeyID(uint160(std::vector<unsigned char>(p + 4, p + 24)));
+    ownerKeyId = CKeyID(uint160(std::vector<unsigned char>(p + 31, p + 51)));
+    return true;
 }
 
 /** Test for "small positive integer" script opcodes - OP_1 through OP_16. */
@@ -155,6 +169,14 @@ bool Solver(const CScript& scriptPubKey, txnouttype& typeRet, std::vector<std::v
     if (MatchPayToPubkeyHash(scriptPubKey, data)) {
         typeRet = TX_PUBKEYHASH;
         vSolutionsRet.push_back(std::move(data));
+        return true;
+    }
+
+    CKeyID stakingKeyId, ownerKeyId;
+    if (MatchColdStakingScript(scriptPubKey, stakingKeyId, ownerKeyId)) {
+        typeRet = TX_COLDSTAKE;
+        vSolutionsRet.push_back(ToByteVector(stakingKeyId));
+        vSolutionsRet.push_back(ToByteVector(ownerKeyId));
         return true;
     }
 

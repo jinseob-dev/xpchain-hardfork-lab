@@ -17,6 +17,7 @@
 #include <policy/fees.h>
 #include <policy/policy.h>
 #include <policy/rbf.h>
+#include <pos/stake.h>
 #include <rpc/blockchain.h>
 #include <rpc/mining.h>
 #include <rpc/rawtransaction.h>
@@ -5280,6 +5281,60 @@ static UniValue listmintings(const JSONRPCRequest& request)
     return results;
 }
 
+static UniValue createcoldstakingaddress(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!pwallet) return NullUniValue;
+
+    if (request.fHelp || request.params.size() != 2) {
+        throw std::runtime_error(
+            "createcoldstakingaddress \"owner_address\" \"staker_address\"\n"
+            "Create and import a P2WSH cold-staking contract. Run this command in both the owner and staking-node wallets.\n");
+    }
+
+    const CTxDestination ownerDest = DecodeDestination(request.params[0].get_str());
+    const CTxDestination stakerDest = DecodeDestination(request.params[1].get_str());
+    auto keyIdForDestination = [](const CTxDestination& dest, CKeyID& keyId) {
+        if (const CKeyID* legacy = boost::get<CKeyID>(&dest)) {
+            keyId = *legacy;
+            return true;
+        }
+        if (const WitnessV0KeyHash* witness = boost::get<WitnessV0KeyHash>(&dest)) {
+            keyId = CKeyID(*witness);
+            return true;
+        }
+        return false;
+    };
+
+    CKeyID ownerKey, stakerKey;
+    if (!IsValidDestination(ownerDest) || !keyIdForDestination(ownerDest, ownerKey)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Owner address must be P2PKH or P2WPKH");
+    }
+    if (!IsValidDestination(stakerDest) || !keyIdForDestination(stakerDest, stakerKey)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Staker address must be P2PKH or P2WPKH");
+    }
+
+    LOCK2(cs_main, pwallet->cs_wallet);
+    if (chainActive.Height() + 1 < Params().GetConsensus().ColdStakingHeight) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("Cold staking activates at block %d", Params().GetConsensus().ColdStakingHeight));
+    }
+
+    const CScript witnessScript = pos::CreateColdStakingScript(stakerKey, ownerKey);
+    const CTxDestination contractDest = WitnessV0ScriptHash(witnessScript);
+    const CScript witnessProgram = GetScriptForDestination(contractDest);
+    if (!pwallet->AddCScript(witnessScript) || !pwallet->AddCScript(witnessProgram)) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Failed to store cold-staking contract");
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("address", EncodeDestination(contractDest));
+    result.pushKV("redeemScript", HexStr(witnessScript));
+    result.pushKV("owner", EncodeDestination(ownerDest));
+    result.pushKV("staker", EncodeDestination(stakerDest));
+    return result;
+}
+
 extern UniValue abortrescan(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
@@ -5350,6 +5405,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "rescanblockchain",                 &rescanblockchain,              {"start_height", "stop_height"} },
     { "wallet",             "sethdseed",                        &sethdseed,                     {"newkeypool","seed"} },
     { "wallet",             "getdescriptorinfo",                &getdescriptorinfo,             {"descriptor"} },
+    { "wallet",             "createcoldstakingaddress",         &createcoldstakingaddress,      {"owner_address","staker_address"} },
 
     /** Account functions (deprecated) */
     { "wallet",             "getaccountaddress",                &getaccountaddress,             {"account"} },

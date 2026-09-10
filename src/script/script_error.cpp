@@ -69,6 +69,8 @@ const char* ScriptErrorString(const ScriptError serror)
             return "Signature must be zero for failed CHECK(MULTI)SIG operation";
         case SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS:
             return "NOPx reserved for soft-fork upgrades";
+        case SCRIPT_ERR_COLDSTAKE:
+            return "Cold-staking spend must preserve its contract and principal";
         case SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM:
             return "Witness version reserved for soft-fork upgrades";
         case SCRIPT_ERR_PUBKEYTYPE:

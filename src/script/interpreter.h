@@ -131,6 +131,9 @@ enum
     // Making unknown public key versions in Tapscript non-standard
     //
     SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE = (1U << 20),
+
+    // Enforce the delegated staking covenant in OP_CHECKCOLDSTAKEVERIFY.
+    SCRIPT_VERIFY_COLDSTAKE = (1U << 21),
 };
 
 bool CheckSignatureEncoding(const std::vector<unsigned char> &vchSig, unsigned int flags, ScriptError* serror);
@@ -188,6 +191,11 @@ public:
          return false;
     }
 
+    virtual bool CheckColdStake(const CScript& scriptCode) const
+    {
+        return false;
+    }
+
     virtual ~BaseSignatureChecker() {}
 };
 
@@ -209,6 +217,7 @@ public:
     bool CheckSig(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const override;
     bool CheckLockTime(const CScriptNum& nLockTime) const override;
     bool CheckSequence(const CScriptNum& nSequence) const override;
+    bool CheckColdStake(const CScript& scriptCode) const override;
 };
 
 using TransactionSignatureChecker = GenericTransactionSignatureChecker<CTransaction>;

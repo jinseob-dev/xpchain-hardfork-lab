@@ -8,6 +8,7 @@
 #include <amount.h>
 #include <chain.h>
 #include <consensus/validation.h>
+#include <crypto/ripemd160.h>
 #include <interfaces/handler.h>
 #include <net.h>
 #include <key_io.h>
@@ -139,6 +140,25 @@ public:
         return m_wallet.ChangeWalletPassphrase(old_wallet_passphrase, new_wallet_passphrase);
     }
     void abortRescan() override { m_wallet.AbortRescan(); }
+    bool addScript(const CScript& script) override
+    {
+        LOCK(m_wallet.cs_wallet);
+        return m_wallet.AddCScript(script);
+    }
+    bool isColdStakingDestination(const CTxDestination& dest) override
+    {
+        LOCK(m_wallet.cs_wallet);
+        const CScript output = GetScriptForDestination(dest);
+        txnouttype type;
+        std::vector<std::vector<unsigned char>> solutions;
+        if (!Solver(output, type, solutions) || type != TX_WITNESS_V0_SCRIPTHASH || solutions.size() != 1) return false;
+        uint160 scriptId;
+        CRIPEMD160().Write(solutions[0].data(), solutions[0].size()).Finalize(scriptId.begin());
+        CScript witnessScript;
+        CKeyID stakingKey, ownerKey;
+        return m_wallet.GetCScript(CScriptID(scriptId), witnessScript) &&
+               MatchColdStakingScript(witnessScript, stakingKey, ownerKey);
+    }
     bool importMnemonicSeed(const std::vector<unsigned char>& seed_bytes, const MnemonicImportOptions& options) override
     {
         LOCK2(cs_main, m_wallet.cs_wallet);

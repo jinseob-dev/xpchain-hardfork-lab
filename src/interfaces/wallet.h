@@ -84,6 +84,10 @@ public:
     //! Import BIP39 mnemonic seed into wallet.
     virtual bool importMnemonicSeed(const std::vector<unsigned char>& seed_bytes, const MnemonicImportOptions& options) = 0;
 
+    //! Store a redeem/witness script so P2SH/P2WSH outputs can be recognized and signed.
+    virtual bool addScript(const CScript& script) = 0;
+    virtual bool isColdStakingDestination(const CTxDestination& dest) = 0;
+
     //! Rescan blockchain from startTime.
     virtual int64_t rescanFromTime(int64_t start_time) = 0;
 

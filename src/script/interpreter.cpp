@@ -457,8 +457,19 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     break;
                 }
 
+                case OP_CHECKCOLDSTAKEVERIFY:
+                {
+                    if (flags & SCRIPT_VERIFY_COLDSTAKE) {
+                        if (!checker.CheckColdStake(script))
+                            return set_error(serror, SCRIPT_ERR_COLDSTAKE);
+                    } else if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS) {
+                        return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
+                    }
+                }
+                break;
+
                 case OP_NOP1: case OP_NOP4: case OP_NOP5:
-                case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9: case OP_NOP10:
+                case OP_NOP6: case OP_NOP7: case OP_NOP8: case OP_NOP9:
                 {
                     if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_NOPS)
                         return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS);
@@ -1607,6 +1618,19 @@ bool GenericTransactionSignatureChecker<T>::CheckSequence(const CScriptNum& nSeq
         return false;
 
     return true;
+}
+
+template <class T>
+bool GenericTransactionSignatureChecker<T>::CheckColdStake(const CScript& scriptCode) const
+{
+    if (txTo == nullptr || nIn >= txTo->vin.size() || txTo->vin.size() != 1 || txTo->vout.size() != 1) {
+        return false;
+    }
+
+    uint256 scriptHash;
+    CSHA256().Write(scriptCode.data(), scriptCode.size()).Finalize(scriptHash.begin());
+    const CScript expectedScript = CScript() << OP_0 << ToByteVector(scriptHash);
+    return txTo->vout[0].scriptPubKey == expectedScript && txTo->vout[0].nValue == amount;
 }
 
 // explicit instantiation

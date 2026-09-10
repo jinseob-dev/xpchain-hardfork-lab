@@ -61,6 +61,9 @@ unsigned int GetCoinStakeScriptFlags(int nHeight, const Consensus::Params& param
     if (nHeight >= params.TaprootHeight) {
         nFlags |= SCRIPT_VERIFY_TAPROOT;
     }
+    if (nHeight >= params.ColdStakingHeight) {
+        nFlags |= SCRIPT_VERIFY_COLDSTAKE;
+    }
     return nFlags;
 }
 

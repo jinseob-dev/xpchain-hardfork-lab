@@ -66,8 +66,11 @@ enum txnouttype
     TX_WITNESS_V0_SCRIPTHASH,
     TX_WITNESS_V0_KEYHASH,
     TX_WITNESS_V1_TAPROOT,
+    TX_COLDSTAKE,
     TX_WITNESS_UNKNOWN, //!< Only for Witness versions not already defined above
 };
+
+bool MatchColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ownerKeyId);
 
 class CNoDestination {
 public:

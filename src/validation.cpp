@@ -1818,6 +1818,9 @@ static unsigned int GetBlockScriptFlags(const CBlockIndex* pindex, const Consens
         flags |= SCRIPT_VERIFY_DISCOURAGE_OP_SUCCESS;
         flags |= SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE;
     }
+    if (pindex->nHeight >= consensusparams.ColdStakingHeight) {
+        flags |= SCRIPT_VERIFY_COLDSTAKE;
+    }
 
     return flags;
 }
@@ -2119,7 +2122,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
 
         blockReward = pos::GetProofOfStakeReward(pindex->nHeight, tx->vout[block.vtx[1]->vin[0].prevout.n].nValue, nTime, chainparams.GetConsensus());
         if (block.vtx[0]->vout.size() >= 3) {
-            if (!VerifyCoinBaseTx(block, state)) {
+            if (!VerifyCoinBaseTx(block, state, pindex->nHeight, chainparams.GetConsensus())) {
                 return false;
             }
         }
@@ -2137,7 +2140,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
         }
         {
             if (VersionBitsState(pindex->pprev, chainparams.GetConsensus(), Consensus::BLOCK_SIGNATURE_ADDITION, versionbitscache) == ThresholdState::ACTIVE) {
-                if (!CheckBlockSignature(block, state, chainparams.GetConsensus())) {
+                if (!CheckBlockSignature(block, state, pindex->nHeight, chainparams.GetConsensus())) {
                     return state.DoS(100, error("ConnectBlock(): CheckBlockSignature failed"), REJECT_INVALID, "bad-signature");
                 }
                 if (block.nNonce != 0){
@@ -3180,9 +3183,9 @@ static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state,
     return true;
 }
 
-bool CheckBlockSignature(const CBlock& block, CValidationState& state, const Consensus::Params& consensusParams)
+bool CheckBlockSignature(const CBlock& block, CValidationState& state, int nHeight, const Consensus::Params& consensusParams)
 {
-    if (!pos::CheckBlockSignature(block, consensusParams)) {
+    if (!pos::CheckBlockSignature(block, nHeight, consensusParams)) {
         return state.DoS(100, false, REJECT_INVALID, "bad-block-signature", false, "block signature verification failed");
     }
     return true;
@@ -5000,10 +5003,20 @@ static bool EqualDestination(CTransactionRef txCoinStake, CPubKey pubkey)
         //p2wpkh p2pkh
         return CKeyID(uint160(vSolutions[0])) == pubkey.GetID();
     }
+    else if (whichType == TX_WITNESS_V1_TAPROOT)
+    {
+        return vSolutions.size() == 1 && XOnlyPubKey(pubkey) == XOnlyPubKey(vSolutions[0]);
+    }
+    else if (whichType == TX_WITNESS_V0_SCRIPTHASH)
+    {
+        CKeyID stakingKey, ownerKey;
+        return pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey) &&
+               stakingKey == pubkey.GetID();
+    }
     return false;
 }
 
-bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state)
+bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state, int nHeight, const Consensus::Params& consensusParams)
 {
     //If the number of transactions is 0, it returns false
     if (block.vtx.size() < 1) {
@@ -5075,6 +5088,11 @@ bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state)
         rewardValues[i - 1].second = block.vtx[0]->vout[i].nValue;
     }
 
+    if (!pos::CheckColdStakingRewardOutputs(block.vtx[1], rewardValues, nHeight, consensusParams)) {
+        return state.DoS(100, error("%s: delegated staking reward must return to its contract", __func__),
+                         REJECT_INVALID, "bad-coldstake-reward");
+    }
+
     //address from coinstakeTX output == address from pubkey
     if (!EqualDestination(block.vtx[1], pubkey)) {
         return state.DoS(100, error("%s: pubkey does not match coinstake's output", __func__), REJECT_INVALID,
@@ -5083,7 +5101,8 @@ bool VerifyCoinBaseTx(const CBlock& block, CValidationState& state)
 
     uint256 hash = pos::GetRewardHash(rewardValues, block.vtx[1], block.nTime);
     //printf("verify hash = %s\n",hash.ToString().c_str());
-    if (pubkey.Verify(hash, vchSig)) {
+    if (pubkey.Verify(hash, vchSig) ||
+        (vchSig.size() == 64 && XOnlyPubKey(pubkey).VerifySchnorr(hash, vchSig))) {
         return true;
     }
     return state.DoS(100, error("%s: verification failed", __func__), REJECT_INVALID, "bad-cb");
