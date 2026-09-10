@@ -53,7 +53,7 @@ ColdStakingDialog::~ColdStakingDialog()
 void ColdStakingDialog::setupUI()
 {
     setWindowTitle(tr("Cold Staking & Delegation"));
-    setMinimumWidth(560);
+    setMinimumWidth(680);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
@@ -187,16 +187,29 @@ void ColdStakingDialog::onGenerateAddressClicked()
         return;
     }
 
-    const CKeyID *ownerKeyId = boost::get<CKeyID>(&ownerDest);
-    const CKeyID *stakerKeyId = boost::get<CKeyID>(&stakerDest);
-
-    if (!ownerKeyId || !stakerKeyId) {
+    CKeyID ownerKeyId;
+    if (const CKeyID *k = boost::get<CKeyID>(&ownerDest)) {
+        ownerKeyId = *k;
+    } else if (const WitnessV0KeyHash *w = boost::get<WitnessV0KeyHash>(&ownerDest)) {
+        ownerKeyId = CKeyID(*w);
+    } else {
         labelStatus->setStyleSheet("color: #f85149;");
-        labelStatus->setText(tr("Only standard public key hash (P2PKH/Bech32) addresses are supported for keys."));
+        labelStatus->setText(tr("Owner address must be a standard P2PKH or SegWit (Bech32) address."));
         return;
     }
 
-    CScript script = pos::CreateColdStakingScript(*stakerKeyId, *ownerKeyId);
+    CKeyID stakerKeyId;
+    if (const CKeyID *k = boost::get<CKeyID>(&stakerDest)) {
+        stakerKeyId = *k;
+    } else if (const WitnessV0KeyHash *w = boost::get<WitnessV0KeyHash>(&stakerDest)) {
+        stakerKeyId = CKeyID(*w);
+    } else {
+        labelStatus->setStyleSheet("color: #f85149;");
+        labelStatus->setText(tr("Staker node address must be a standard P2PKH or SegWit (Bech32) address."));
+        return;
+    }
+
+    CScript script = pos::CreateColdStakingScript(stakerKeyId, ownerKeyId);
     std::string coldAddr = EncodeDestination(WitnessV0ScriptHash(script));
 
     QString qAddr = QString::fromStdString(coldAddr);
