@@ -265,7 +265,6 @@ jobs:
           mkdir -p dmg-src
           ditto "${APP_BUNDLE}" "dmg-src/${APP_BUNDLE}"
           cp contrib/install/README-INSTALL.txt dmg-src/
-          ln -s /Applications dmg-src/Applications
           create-dmg \
             --volname "XPChain Core" \
             --window-pos 200 120 --window-size 560 360 --icon-size 120 \
@@ -287,7 +286,6 @@ jobs:
           mkdir -p testnet-dmg-src
           ditto "${TESTNET_APP}" "testnet-dmg-src/${TESTNET_APP}"
           cp contrib/install/README-INSTALL.txt testnet-dmg-src/
-          ln -s /Applications testnet-dmg-src/Applications
           create-dmg \
             --volname "XPChain Testnet" \
             --window-pos 200 120 --window-size 560 360 --icon-size 120 \

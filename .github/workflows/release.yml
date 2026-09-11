@@ -253,7 +253,6 @@ jobs:
             mkdir -p dmg-src
             ditto "${APP_BUNDLE}" "dmg-src/${APP_BUNDLE}"
             cp contrib/install/README-INSTALL.txt dmg-src/
-            ln -s /Applications dmg-src/Applications
             create-dmg \
               --volname "XPChain Core" \
               --window-pos 200 120 \
