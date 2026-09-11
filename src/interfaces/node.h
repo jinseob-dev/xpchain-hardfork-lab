@@ -132,6 +132,9 @@ public:
     //! Get last block time.
     virtual int64_t getLastBlockTime() = 0;
 
+    //! Get current proof-of-stake difficulty.
+    virtual double getDifficulty() = 0;
+
     //! Get verification progress.
     virtual double getVerificationProgress() = 0;
 

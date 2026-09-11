@@ -18,6 +18,7 @@
 #include <interfaces/node.h>
 #include <outputtype.h>
 #include <key_io.h>
+#include <pos/delegation.h>
 #include <ui_interface.h>
 #include <util.h> // for GetBoolArg
 #include <wallet/coincontrol.h>
@@ -257,6 +258,50 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
     }
 
     return SendCoinsReturn(OK);
+}
+
+WalletModel::SendCoinsReturn WalletModel::prepareColdStakingTransaction(
+    WalletModelTransaction& transaction, const CCoinControl& coinControl, int& outputCount)
+{
+    outputCount = 0;
+    const QList<SendCoinsRecipient> requested = transaction.getRecipients();
+    if (requested.size() != 1) return InvalidAmount;
+    const SendCoinsRecipient& recipient = requested.first();
+    if (!validateAddress(recipient.address)) return InvalidAddress;
+    if (recipient.amount <= 0) return InvalidAmount;
+
+    const CTxDestination destination = DecodeDestination(recipient.address.toStdString());
+    if (!m_wallet->isColdStakingDestination(destination)) return InvalidAddress;
+
+    pos::ColdStakeSplitPlan plan;
+    if (!pos::RecommendColdStakeSplit(recipient.amount, m_node.getDifficulty(),
+                                      pos::ColdStakeSplitOptions{}, plan)) {
+        return InvalidAmount;
+    }
+    outputCount = static_cast<int>(plan.outputs.size());
+
+    const CAmount balance = m_wallet->getAvailableBalance(coinControl);
+    if (recipient.amount > balance) return AmountExceedsBalance;
+
+    const CScript scriptPubKey = GetScriptForDestination(destination);
+    std::vector<CRecipient> outputs;
+    outputs.reserve(plan.outputs.size());
+    for (const CAmount amount : plan.outputs) outputs.push_back({scriptPubKey, amount, false});
+
+    CAmount fee = 0;
+    int changePosition = -1;
+    std::string failureReason;
+    auto& pending = transaction.getWtx();
+    pending = m_wallet->createTransaction(outputs, coinControl, true, changePosition, fee, failureReason);
+    transaction.setTransactionFee(fee);
+    if (!pending) {
+        if (recipient.amount + fee > balance) return AmountWithFeeExceedsBalance;
+        Q_EMIT message(tr("Cold Staking"), QString::fromStdString(failureReason),
+                       CClientUIInterface::MSG_ERROR);
+        return TransactionCreationFailed;
+    }
+    if (fee > m_node.getMaxTxFee()) return AbsurdFee;
+    return OK;
 }
 
 WalletModel::SendCoinsReturn WalletModel::sendCoins(WalletModelTransaction &transaction)

@@ -166,6 +166,11 @@ public:
     // prepare transaction for getting txfee before sending coins
     SendCoinsReturn prepareTransaction(WalletModelTransaction &transaction, const CCoinControl& coinControl);
 
+    // Prepare a delegated-staking transaction with an amount-dependent output split.
+    SendCoinsReturn prepareColdStakingTransaction(WalletModelTransaction &transaction,
+                                                  const CCoinControl& coinControl,
+                                                  int& outputCount);
+
     // Send coins to a list of recipients
     SendCoinsReturn sendCoins(WalletModelTransaction &transaction);
 

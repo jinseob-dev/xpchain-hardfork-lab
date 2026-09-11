@@ -20,6 +20,7 @@
 #include <policy/policy.h>
 #include <primitives/block.h>
 #include <rpc/server.h>
+#include <rpc/blockchain.h>
 #include <scheduler.h>
 #include <shutdown.h>
 #include <sync.h>
@@ -172,6 +173,11 @@ class NodeImpl : public Node
             return ::chainActive.Tip()->GetBlockTime();
         }
         return Params().GenesisBlock().GetBlockTime(); // Genesis block's time of current network
+    }
+    double getDifficulty() override
+    {
+        LOCK(::cs_main);
+        return GetDifficulty(::chainActive.Tip());
     }
     double getVerificationProgress() override
     {

@@ -116,7 +116,10 @@ void ColdStakingDialog::setupUI()
 
     QLabel *descDelegate = new QLabel(
         tr("Send coins to a <b>Cold Staking Address</b> to activate Proof-of-Stake delegation.<br>"
-           "Your funds remain completely safe in cold storage under your owner key."), tabDelegate);
+           "Your funds remain under your owner key. The wallet automatically chooses an amount-dependent UTXO split "
+           "using current network difficulty.<br><br>"
+           "<b>Policy:</b> preferred staking age 32 days; chain-stall fallback to the 3-day consensus minimum. "
+           "Node commission is disabled during the testnet phase."), tabDelegate);
     descDelegate->setWordWrap(true);
     delegateLayout->addWidget(descDelegate);
 
@@ -298,20 +301,31 @@ void ColdStakingDialog::onDelegateClicked()
 
     WalletModelTransaction tx(recipients);
     CCoinControl ctrl;
-    WalletModel::SendCoinsReturn prepareStatus = model->prepareTransaction(tx, ctrl);
+    int outputCount = 0;
+    WalletModel::SendCoinsReturn prepareStatus = model->prepareColdStakingTransaction(tx, ctrl, outputCount);
     if (prepareStatus.status != WalletModel::OK) {
         labelDelegateStatus->setStyleSheet("color: #f85149;");
         labelDelegateStatus->setText(tr("Failed to prepare transaction (insufficient funds or fee error)."));
         return;
     }
 
+
+    const QString fee = XPChainUnits::formatWithUnit(XPChainUnits::XPC, tx.getTransactionFee());
+    const QMessageBox::StandardButton confirmation = QMessageBox::question(
+        this, tr("Confirm Delegation"),
+        tr("Delegate %1 XPC as %2 staking UTXO(s)?\n\nTransaction fee: %3\n"
+           "Rewards return to the same cold-staking contract; operator commission is disabled.")
+            .arg(amountStr).arg(outputCount).arg(fee),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (confirmation != QMessageBox::Yes) return;
+
     WalletModel::SendCoinsReturn sendStatus = model->sendCoins(tx);
     if (sendStatus.status == WalletModel::OK) {
         labelDelegateStatus->setStyleSheet("color: #56d364;");
         labelDelegateStatus->setText(tr("Delegation transaction broadcasted successfully!"));
         QMessageBox::information(this, tr("Delegation Sent"),
-            tr("Successfully sent %1 XPC to Cold Staking address!\nFunds are now delegating Proof-of-Stake.")
-                .arg(amountStr));
+            tr("Successfully sent %1 XPC in %2 staking UTXO(s)!\nFunds are now delegating Proof-of-Stake.")
+                .arg(amountStr).arg(outputCount));
         editDelegateAmount->clear();
     } else {
         labelDelegateStatus->setStyleSheet("color: #f85149;");
