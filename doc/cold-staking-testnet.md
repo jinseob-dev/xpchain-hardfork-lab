@@ -1,5 +1,7 @@
 # Cold staking testnet guide
 
+[한국어 안내](cold-staking-testnet.ko.md)
+
 Cold staking separates the owner key, which can withdraw funds, from the staking
 key used by an online node. During the testnet phase all rewards return to the
 same cold-staking contract. Operator commission is intentionally disabled.
