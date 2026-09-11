@@ -179,18 +179,19 @@ jobs:
           ./contrib/install/package-release.sh win64 "${RELEASE_TAG}" dist
           if [ -f src/qt/xpchain-qt.exe ]; then
             cp dist/*.exe release/
-            make deploy || echo "NSIS deploy skipped (makensis or GUI missing)"
+            make deploy
             shopt -s nullglob
             for setup in xpchain-*-win64-setup.exe xpchain-*-win-setup.exe; do
               mv "$setup" "xpchain-${RELEASE_TAG}-win64-setup.exe"
             done
+            test -f "xpchain-${RELEASE_TAG}-win64-setup.exe"
           fi
 
       - name: Stage Windows artifacts
         run: |
           mkdir -p win-upload
           cp xpchain-*-win64.zip win-upload/
-          cp xpchain-*-win64-setup.exe win-upload/ 2>/dev/null || true
+          cp xpchain-*-win64-setup.exe win-upload/
 
       - uses: actions/upload-artifact@v4
         with:
