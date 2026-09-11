@@ -306,7 +306,9 @@ jobs:
 
   publish:
     name: Publish public prerelease
-    if: github.event_name == 'push' || inputs.publish == true
+    # preview-build-* tags exercise every package job without publishing a
+    # public release. Other preview tags preserve the historical publish flow.
+    if: (github.event_name == 'push' && startsWith(github.ref_name, 'preview-build-') == false) || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     runs-on: ubuntu-22.04
     needs: [linux, linux-arm64, windows64, macos]
     steps:
