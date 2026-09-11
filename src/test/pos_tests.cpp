@@ -22,6 +22,7 @@
 #include <key.h>
 #include <keystore.h>
 #include <policy/policy.h>
+#include <pos/delegation.h>
 #include <pos/height.h>
 #include <pos/kernel.h>
 #include <pos/reward.h>
@@ -46,6 +47,61 @@
 // BasicTestingSetup selects mainnet, which is what CheckStakeKernelHash reads its
 // stake age limits from via the global Params().
 BOOST_FIXTURE_TEST_SUITE(pos_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(cold_staking_split_plan_scales_with_amount)
+{
+    pos::ColdStakeSplitOptions options;
+    options.minimumOutputAmount = 100 * COIN;
+    options.maximumOutputs = 20;
+
+    pos::ColdStakeSplitPlan small;
+    BOOST_REQUIRE(pos::RecommendColdStakeSplit(1000 * COIN, 1.0, options, small));
+    BOOST_REQUIRE(!small.outputs.empty());
+
+    pos::ColdStakeSplitPlan large;
+    BOOST_REQUIRE(pos::RecommendColdStakeSplit(1000000 * COIN, 1.0, options, large));
+    BOOST_CHECK(large.outputs.size() >= small.outputs.size());
+    BOOST_CHECK(large.outputs.size() <= options.maximumOutputs);
+
+    CAmount sum = 0;
+    for (const CAmount amount : large.outputs) {
+        BOOST_CHECK(amount >= options.minimumOutputAmount);
+        sum += amount;
+    }
+    BOOST_CHECK_EQUAL(sum, large.totalAmount);
+    BOOST_CHECK(large.estimatedProbability > 0);
+    BOOST_CHECK(large.estimatedProbability <= 1);
+}
+
+BOOST_AUTO_TEST_CASE(cold_staking_split_plan_validates_limits)
+{
+    pos::ColdStakeSplitOptions options;
+    options.minimumOutputAmount = 100 * COIN;
+    pos::ColdStakeSplitPlan plan;
+    BOOST_CHECK(!pos::RecommendColdStakeSplit(99 * COIN, 1.0, options, plan));
+    BOOST_CHECK(!pos::RecommendColdStakeSplit(1000 * COIN, 0.0, options, plan));
+
+    options.targetAgeDays = options.minimumAgeDays;
+    BOOST_CHECK(!pos::RecommendColdStakeSplit(1000 * COIN, 1.0, options, plan));
+}
+
+BOOST_AUTO_TEST_CASE(cold_staking_target_age_falls_back_when_tip_is_stale)
+{
+    static constexpr int64_t DAY = 24 * 60 * 60;
+    const int64_t minimumAge = 3 * DAY;
+    const int64_t targetAge = 32 * DAY;
+    const int64_t fallbackDelay = 15 * 60;
+
+    BOOST_CHECK_EQUAL(pos::GetColdStakeEffectiveTargetAge(
+        minimumAge, targetAge, minimumAge, fallbackDelay, 0), targetAge);
+    BOOST_CHECK_EQUAL(pos::GetColdStakeEffectiveTargetAge(
+        minimumAge, targetAge, minimumAge, fallbackDelay, fallbackDelay / 2),
+        targetAge - (targetAge - minimumAge) / 2);
+    BOOST_CHECK_EQUAL(pos::GetColdStakeEffectiveTargetAge(
+        minimumAge, targetAge, minimumAge, fallbackDelay, fallbackDelay), minimumAge);
+    BOOST_CHECK_EQUAL(pos::GetColdStakeEffectiveTargetAge(
+        minimumAge, 0, 0, fallbackDelay, 0), minimumAge);
+}
 
 namespace {
 

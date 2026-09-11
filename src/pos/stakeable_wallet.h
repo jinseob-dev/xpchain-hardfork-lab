@@ -23,6 +23,7 @@ struct StakeCandidate {
     COutPoint outpoint;
     CTxOut txout;
     uint256 hashBlock;
+    bool isColdStake{false};
 };
 
 /**

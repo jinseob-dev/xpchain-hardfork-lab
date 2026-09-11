@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <pos/staker.h>
+#include <pos/delegation.h>
 #include <pos/height.h>
 #include <pos/kernel.h>
 #include <pos/reward.h>
@@ -18,6 +19,11 @@
 #include <validation.h>
 
 namespace pos {
+
+static constexpr int64_t SECONDS_PER_DAY = 24 * 60 * 60;
+static constexpr int64_t DEFAULT_COLD_STAKE_TARGET_AGE_DAYS = 32;
+static constexpr int64_t DEFAULT_COLD_STAKE_FALLBACK_AGE_DAYS = 3;
+static constexpr int64_t DEFAULT_COLD_STAKE_FALLBACK_DELAY_MINUTES = 15;
 
 static unsigned int GetnBits(const CBlockIndex* pIndexLast, const Consensus::Params& params)
 {
@@ -70,6 +76,19 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
 
             unsigned int nBits = GetnBits(pIndexLast, Params().GetConsensus());
             uint32_t nTime = std::max(GetAdjustedTime(), pIndexLast->GetMedianTimePast() + 1);
+            const int64_t targetAgeDays = std::max<int64_t>(0, std::min<int64_t>(3650,
+                gArgs.GetArg("-coldstaketargetage", DEFAULT_COLD_STAKE_TARGET_AGE_DAYS)));
+            const int64_t fallbackAgeDays = std::max<int64_t>(0, std::min<int64_t>(3650,
+                gArgs.GetArg("-coldstakefallbackage", DEFAULT_COLD_STAKE_FALLBACK_AGE_DAYS)));
+            const int64_t fallbackDelayMinutes = std::max<int64_t>(0, std::min<int64_t>(10080,
+                gArgs.GetArg("-coldstakefallbackdelay", DEFAULT_COLD_STAKE_FALLBACK_DELAY_MINUTES)));
+            const int64_t secondsSinceTip = std::max<int64_t>(0, int64_t{nTime} - pIndexLast->GetBlockTime());
+            const int64_t coldStakeTargetAge = GetColdStakeEffectiveTargetAge(
+                Params().GetConsensus().nStakeMinAge,
+                targetAgeDays * SECONDS_PER_DAY,
+                fallbackAgeDays * SECONDS_PER_DAY,
+                fallbackDelayMinutes * 60,
+                secondsSinceTip);
 
             std::vector<StakeCandidate> vCandidates;
             wallet->GetStakeCandidates(vCandidates);
@@ -77,6 +96,10 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
             for (const StakeCandidate& candidate : vCandidates) {
                 CBlockIndex* pprevIndex;
                 if (!GetPrevBlockIndex(candidate.hashBlock, &pprevIndex)) {
+                    continue;
+                }
+                if (candidate.isColdStake &&
+                    int64_t{nTime} < pprevIndex->GetBlockTime() + coldStakeTargetAge) {
                     continue;
                 }
                 uint256 hashProofOfStake;

@@ -256,6 +256,7 @@ libxpchain_server_a_SOURCES = \
   policy/fees.cpp \
   policy/policy.cpp \
   policy/rbf.cpp \
+  pos/delegation.cpp \
   pos/height.cpp \
   pos/kernel.cpp \
   pos/reward.cpp \

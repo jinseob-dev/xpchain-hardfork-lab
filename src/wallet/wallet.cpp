@@ -4673,11 +4673,9 @@ std::vector<OutputGroup> CWallet::GroupOutputs(const std::vector<COutput>& outpu
 
 void CWallet::GetStakeCandidates(std::vector<pos::StakeCandidate>& vCandidates)
 {
+    LOCK2(cs_main, cs_wallet);
     std::vector<COutput> vCoins;
-    {
-        LOCK2(cs_main, cs_wallet);
-        AvailableCoins(vCoins);
-    }
+    AvailableCoins(vCoins);
     vCandidates.reserve(vCoins.size());
     for (const COutput& coin : vCoins) {
         if (!coin.tx || !coin.tx->tx) continue;
@@ -4685,6 +4683,17 @@ void CWallet::GetStakeCandidates(std::vector<pos::StakeCandidate>& vCandidates)
         sc.outpoint = COutPoint(coin.tx->GetHash(), coin.i);
         sc.txout = coin.tx->tx->vout[coin.i];
         sc.hashBlock = coin.tx->hashBlock;
+        txnouttype candidateType;
+        std::vector<std::vector<unsigned char>> candidateSolutions;
+        if (Solver(sc.txout.scriptPubKey, candidateType, candidateSolutions) &&
+            candidateType == TX_WITNESS_V0_SCRIPTHASH && candidateSolutions.size() == 1) {
+            uint160 scriptId;
+            CRIPEMD160().Write(candidateSolutions[0].data(), candidateSolutions[0].size()).Finalize(scriptId.begin());
+            CScript witnessScript;
+            CKeyID stakingKey, ownerKey;
+            sc.isColdStake = GetCScript(CScriptID(scriptId), witnessScript) &&
+                pos::IsColdStakingScript(witnessScript, stakingKey, ownerKey);
+        }
         vCandidates.push_back(sc);
     }
 }

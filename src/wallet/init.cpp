@@ -94,6 +94,9 @@ void WalletInit::AddWalletOptions() const
     gArgs.AddArg("-walletrejectlongchains", strprintf("Wallet will not create transactions that violate mempool chain limits (default: %u)", DEFAULT_WALLET_REJECT_LONG_CHAINS), true, OptionsCategory::WALLET_DEBUG_TEST);
 
     gArgs.AddArg("-minting", "Whether to mint blocks when the wallet is not locked (0 = no, default: 1)", false, OptionsCategory::MINTING);
+    gArgs.AddArg("-coldstaketargetage=<days>", "Preferred age before delegated outputs are staked (0 = consensus minimum, default: 32)", false, OptionsCategory::MINTING);
+    gArgs.AddArg("-coldstakefallbackage=<days>", "Minimum delegated staking policy age when the chain is stale (0 = consensus minimum, default: 3)", false, OptionsCategory::MINTING);
+    gArgs.AddArg("-coldstakefallbackdelay=<minutes>", "Time without a block before delegated staking policy reaches its fallback age (default: 15)", false, OptionsCategory::MINTING);
 }
 
 bool WalletInit::ParameterInteraction() const
