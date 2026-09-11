@@ -22,6 +22,8 @@ Steps 5 and 6 are what make this useful for the staged modernization: they reval
 proof-of-stake block through the network and the disk paths, not just the mining path.
 """
 
+from decimal import Decimal
+
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -53,13 +55,14 @@ class PoSStakingTest(BitcoinTestFramework):
         self.setup_nodes()
         connect_nodes(self.nodes[0], 1)
 
-    def mine_pow_range(self, taproot_address, cold_address):
+    def mine_pow_range(self, taproot_address, cold_address, contract):
         """Mine heights 1..nSwitchHeight, which is the whole proof-of-work range."""
         self.log.info("Mining the proof-of-work range up to height %d", REGTEST_SWITCH_HEIGHT)
         # generatetoaddress is capped per call by the RPC's own retry budget, so mine in
         # chunks to keep each call short.
         taproot_blocks = 200
         self.nodes[0].generatetoaddress(taproot_blocks, taproot_address)
+        self.check_delegation_split_rpc(contract)
         remaining = REGTEST_SWITCH_HEIGHT - taproot_blocks
         while remaining > 0:
             batch = min(remaining, 250)
@@ -67,6 +70,46 @@ class PoSStakingTest(BitcoinTestFramework):
             remaining -= batch
         assert_equal(self.nodes[0].getblockcount(), REGTEST_SWITCH_HEIGHT)
         sync_blocks(self.nodes)
+
+    def check_delegation_split_rpc(self, contract):
+        """Create one delegation transaction with an amount-dependent split."""
+        self.log.info("Checking automatic delegated-staking UTXO splitting")
+        imported = self.nodes[0].createcoldstakingaddress(
+            contract['owner'], contract['staker'])
+        assert_equal(imported['address'], contract['address'])
+
+        options = {
+            'maximum_outputs': 4,
+            'minimum_output_amount': 1,
+        }
+        estimate = self.nodes[0].estimatecoldstakingsplit(1000, options)
+        assert_greater_than(estimate['output_count'], 1)
+        assert_equal(estimate['output_count'], len(estimate['outputs']))
+        assert_equal(sum(estimate['outputs']), Decimal('1000'))
+
+        delegation = self.nodes[0].delegatecoldstaking(contract['address'], 1000, options)
+        assert_equal(delegation['output_count'], estimate['output_count'])
+        assert_equal(sum(delegation['outputs']), Decimal('1000'))
+        raw = self.nodes[0].getrawtransaction(delegation['txid'], True)
+        contract_outputs = [output for output in raw['vout']
+                            if output['scriptPubKey'].get('addresses') == [contract['address']]]
+        assert_equal(len(contract_outputs), delegation['output_count'])
+        assert_equal(sum(output['value'] for output in contract_outputs), Decimal('1000'))
+
+        listed = self.nodes[0].listcoldstaking()
+        assert_greater_than(len(listed['outputs']), 0)
+        assert all(output['owner'] for output in listed['outputs'])
+
+        withdrawal_address = self.nodes[0].getnewaddress('cold withdrawal', 'bech32')
+        withdrawal = self.nodes[0].withdrawcoldstaking(
+            contract['address'], withdrawal_address, 10)
+        withdrawn = self.nodes[0].getrawtransaction(withdrawal['txid'], True)
+        withdrawn_outputs = [output for output in withdrawn['vout']
+                             if output['scriptPubKey'].get('addresses') == [withdrawal_address]]
+        assert_equal(sum(output['value'] for output in withdrawn_outputs), Decimal('10'))
+        # The empty selector chooses the owner branch, not the delegated staking branch.
+        assert_equal(withdrawn['vin'][0]['txinwitness'][-2], '')
+        assert_equal(withdrawn['vin'][0]['txinwitness'][-1], contract['redeemScript'])
 
     def assert_pow_rejected_above_switch(self, address):
         """Above the switch height a template needs a coinstake, which mining RPCs lack.
@@ -188,7 +231,8 @@ class PoSStakingTest(BitcoinTestFramework):
         for node in self.nodes:
             node.setmocktime(mocktime)
 
-        self.restart_node(1, extra_args=['-txindex', '-minting=1', '-mocktime={}'.format(mocktime)])
+        self.restart_node(1, extra_args=['-txindex', '-minting=1', '-coldstaketargetage=0',
+                                         '-mocktime={}'.format(mocktime)])
         connect_nodes(self.nodes[0], 1)
         self.nodes[1].setmocktime(mocktime)
         wait_until(lambda: self.nodes[1].getblockcount() > previous_height, timeout=180)
@@ -222,7 +266,7 @@ class PoSStakingTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getaddressinfo(contract['address'])['ismine'], True)
         assert_equal(self.nodes[0].getaddressinfo(contract['address'])['ismine'], False)
 
-        self.mine_pow_range(address, contract['address'])
+        self.mine_pow_range(address, contract['address'], contract)
         self.assert_pow_rejected_above_switch(address)
 
         staked_hash = self.stake_one_block()

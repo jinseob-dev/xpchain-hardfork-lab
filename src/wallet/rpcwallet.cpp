@@ -17,6 +17,7 @@
 #include <policy/fees.h>
 #include <policy/policy.h>
 #include <policy/rbf.h>
+#include <pos/delegation.h>
 #include <pos/stake.h>
 #include <rpc/blockchain.h>
 #include <rpc/mining.h>
@@ -5335,6 +5336,321 @@ static UniValue createcoldstakingaddress(const JSONRPCRequest& request)
     return result;
 }
 
+static pos::ColdStakeSplitOptions ParseColdStakeSplitOptions(const UniValue& value)
+{
+    pos::ColdStakeSplitOptions options;
+    if (value.isNull()) return options;
+
+    RPCTypeCheckArgument(value, UniValue::VOBJ);
+    RPCTypeCheckObj(value,
+        {
+            {"minimum_age_days", UniValueType(UniValue::VNUM)},
+            {"target_age_days", UniValueType(UniValue::VNUM)},
+            {"maximum_age_days", UniValueType(UniValue::VNUM)},
+            {"target_probability", UniValueType(UniValue::VNUM)},
+            {"maximum_outputs", UniValueType(UniValue::VNUM)},
+            {"minimum_output_amount", UniValueType()},
+        }, true, true);
+
+    if (value.exists("minimum_age_days")) options.minimumAgeDays = value["minimum_age_days"].get_int();
+    if (value.exists("target_age_days")) options.targetAgeDays = value["target_age_days"].get_int();
+    if (value.exists("maximum_age_days")) options.maximumAgeDays = value["maximum_age_days"].get_int();
+    if (value.exists("target_probability")) options.targetProbability = value["target_probability"].get_real();
+    if (value.exists("maximum_outputs")) {
+        const int maximumOutputs = value["maximum_outputs"].get_int();
+        if (maximumOutputs < 1 || maximumOutputs > 100) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "maximum_outputs must be between 1 and 100");
+        }
+        options.maximumOutputs = static_cast<size_t>(maximumOutputs);
+    }
+    if (value.exists("minimum_output_amount")) {
+        options.minimumOutputAmount = AmountFromValue(value["minimum_output_amount"]);
+    }
+    return options;
+}
+
+static UniValue ColdStakeSplitPlanToJSON(const pos::ColdStakeSplitPlan& plan, double difficulty)
+{
+    UniValue outputs(UniValue::VARR);
+    for (const CAmount amount : plan.outputs) outputs.push_back(ValueFromAmount(amount));
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("total_amount", ValueFromAmount(plan.totalAmount));
+    result.pushKV("output_count", static_cast<int>(plan.outputs.size()));
+    result.pushKV("target_output_amount", ValueFromAmount(plan.targetOutputAmount));
+    result.pushKV("estimated_probability", plan.estimatedProbability);
+    result.pushKV("difficulty", difficulty);
+    result.pushKV("outputs", outputs);
+    return result;
+}
+
+static bool GetColdStakingContract(CWallet* const pwallet, const CTxDestination& destination,
+                                   CScript& scriptPubKey, CKeyID* stakingKeyOut = nullptr,
+                                   CKeyID* ownerKeyOut = nullptr)
+{
+    scriptPubKey = GetScriptForDestination(destination);
+    txnouttype type;
+    std::vector<std::vector<unsigned char>> solutions;
+    if (!Solver(scriptPubKey, type, solutions) ||
+        type != TX_WITNESS_V0_SCRIPTHASH || solutions.size() != 1) {
+        return false;
+    }
+
+    uint160 scriptId;
+    CRIPEMD160().Write(solutions[0].data(), solutions[0].size()).Finalize(scriptId.begin());
+    CScript witnessScript;
+    CKeyID stakingKey, ownerKey;
+    if (!pwallet->GetCScript(CScriptID(scriptId), witnessScript) ||
+        !pos::IsColdStakingScript(witnessScript, stakingKey, ownerKey)) {
+        return false;
+    }
+    if (stakingKeyOut) *stakingKeyOut = stakingKey;
+    if (ownerKeyOut) *ownerKeyOut = ownerKey;
+    return true;
+}
+
+static UniValue estimatecoldstakingsplit(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet.get(), request.fHelp)) return NullUniValue;
+
+    if (request.fHelp || request.params.empty() || request.params.size() > 2) {
+        throw std::runtime_error(
+            "estimatecoldstakingsplit amount ( options )\n"
+            "Estimate an amount-dependent delegated-staking UTXO split. This is wallet policy, not consensus.\n"
+            "Options: minimum_age_days, target_age_days, maximum_age_days, target_probability, maximum_outputs, minimum_output_amount.\n");
+    }
+
+    LOCK(cs_main);
+    const CAmount amount = AmountFromValue(request.params[0]);
+    const pos::ColdStakeSplitOptions options = ParseColdStakeSplitOptions(request.params[1]);
+    const double difficulty = GetDifficulty(chainActive.Tip());
+    pos::ColdStakeSplitPlan plan;
+    if (!pos::RecommendColdStakeSplit(amount, difficulty, options, plan)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to create a split plan; check amount, age, probability, and output limits");
+    }
+    return ColdStakeSplitPlanToJSON(plan, difficulty);
+}
+
+static UniValue delegatecoldstaking(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet.get(), request.fHelp)) return NullUniValue;
+
+    if (request.fHelp || request.params.size() < 2 || request.params.size() > 3) {
+        throw std::runtime_error(
+            "delegatecoldstaking \"contract_address\" amount ( options )\n"
+            "Delegate funds to a known cold-staking contract using the recommended amount-dependent UTXO split.\n"
+            + HelpRequiringPassphrase(pwallet.get()) +
+            "Options: minimum_age_days, target_age_days, maximum_age_days, target_probability, maximum_outputs, minimum_output_amount.\n");
+    }
+
+    pwallet->BlockUntilSyncedToCurrentChain();
+    LOCK2(cs_main, pwallet->cs_wallet);
+    if (chainActive.Height() + 1 < Params().GetConsensus().ColdStakingHeight) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("Cold staking activates at block %d", Params().GetConsensus().ColdStakingHeight));
+    }
+    if (pwallet->GetBroadcastTransactions() && !g_connman) {
+        throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
+    }
+
+    const CTxDestination destination = DecodeDestination(request.params[0].get_str());
+    CScript scriptPubKey;
+    if (!IsValidDestination(destination) || !GetColdStakingContract(pwallet.get(), destination, scriptPubKey)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                           "Address is not a cold-staking contract known to this wallet; call createcoldstakingaddress first");
+    }
+
+    const CAmount amount = AmountFromValue(request.params[1]);
+    const pos::ColdStakeSplitOptions options = ParseColdStakeSplitOptions(request.params[2]);
+    const double difficulty = GetDifficulty(chainActive.Tip());
+    pos::ColdStakeSplitPlan plan;
+    if (!pos::RecommendColdStakeSplit(amount, difficulty, options, plan)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to create a split plan; check amount, age, probability, and output limits");
+    }
+
+    EnsureWalletIsUnlocked(pwallet.get());
+    if (amount > pwallet->GetBalance()) {
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Insufficient funds");
+    }
+
+    std::vector<CRecipient> recipients;
+    recipients.reserve(plan.outputs.size());
+    for (const CAmount output : plan.outputs) recipients.push_back({scriptPubKey, output, false});
+
+    CReserveKey changeKey(pwallet.get());
+    CAmount fee = 0;
+    int changePosition = -1;
+    std::string error;
+    CTransactionRef transaction;
+    CCoinControl coinControl;
+    if (!pwallet->CreateTransaction(recipients, transaction, changeKey, fee, changePosition, error, coinControl)) {
+        if (amount + fee > pwallet->GetBalance()) {
+            error = strprintf("This transaction requires a fee of at least %s in addition to the delegated amount", FormatMoney(fee));
+        }
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, error);
+    }
+
+    CValidationState state;
+    mapValue_t metadata;
+    metadata["comment"] = "cold-staking delegation";
+    if (!pwallet->CommitTransaction(transaction, std::move(metadata), {}, "", changeKey, g_connman.get(), state)) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("Transaction commit failed: %s", FormatStateMessage(state)));
+    }
+
+    UniValue result = ColdStakeSplitPlanToJSON(plan, difficulty);
+    result.pushKV("txid", transaction->GetHash().GetHex());
+    result.pushKV("fee", ValueFromAmount(fee));
+    result.pushKV("contract_address", EncodeDestination(destination));
+    return result;
+}
+
+static UniValue listcoldstaking(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet.get(), request.fHelp)) return NullUniValue;
+    if (request.fHelp || !request.params.empty()) {
+        throw std::runtime_error(
+            "listcoldstaking\n"
+            "List unspent cold-staking contracts known to this wallet and identify its owner/staker role.\n");
+    }
+
+    pwallet->BlockUntilSyncedToCurrentChain();
+    LOCK2(cs_main, pwallet->cs_wallet);
+    std::vector<COutput> coins;
+    pwallet->AvailableCoins(coins, false);
+
+    CAmount total = 0;
+    CAmount ownerTotal = 0;
+    CAmount stakerTotal = 0;
+    UniValue entries(UniValue::VARR);
+    for (const COutput& coin : coins) {
+        if (!coin.tx || !coin.tx->tx) continue;
+        const CTxOut& output = coin.tx->tx->vout[coin.i];
+        CTxDestination destination;
+        if (!ExtractDestination(output.scriptPubKey, destination)) continue;
+
+        CScript scriptPubKey;
+        CKeyID stakingKey, ownerKey;
+        if (!GetColdStakingContract(pwallet.get(), destination, scriptPubKey, &stakingKey, &ownerKey)) continue;
+
+        const bool hasOwnerKey = pwallet->HaveKey(ownerKey);
+        const bool hasStakingKey = pwallet->HaveKey(stakingKey);
+        UniValue entry(UniValue::VOBJ);
+        entry.pushKV("txid", coin.tx->GetHash().GetHex());
+        entry.pushKV("vout", coin.i);
+        entry.pushKV("address", EncodeDestination(destination));
+        entry.pushKV("amount", ValueFromAmount(output.nValue));
+        entry.pushKV("confirmations", coin.nDepth);
+        entry.pushKV("owner", hasOwnerKey);
+        entry.pushKV("staker", hasStakingKey);
+        entries.push_back(entry);
+
+        total += output.nValue;
+        if (hasOwnerKey) ownerTotal += output.nValue;
+        if (hasStakingKey) stakerTotal += output.nValue;
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("total_amount", ValueFromAmount(total));
+    result.pushKV("owner_amount", ValueFromAmount(ownerTotal));
+    result.pushKV("staker_amount", ValueFromAmount(stakerTotal));
+    result.pushKV("outputs", entries);
+    return result;
+}
+
+static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet.get(), request.fHelp)) return NullUniValue;
+    if (request.fHelp || request.params.size() != 3) {
+        throw std::runtime_error(
+            "withdrawcoldstaking \"contract_address\" \"destination_address\" amount\n"
+            "Withdraw delegated funds using the contract owner key. The fee is paid from contract change.\n"
+            + HelpRequiringPassphrase(pwallet.get()));
+    }
+
+    pwallet->BlockUntilSyncedToCurrentChain();
+    LOCK2(cs_main, pwallet->cs_wallet);
+    if (pwallet->GetBroadcastTransactions() && !g_connman) {
+        throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
+    }
+
+    const CTxDestination contract = DecodeDestination(request.params[0].get_str());
+    CScript contractScript;
+    CKeyID stakingKey, ownerKey;
+    if (!IsValidDestination(contract) ||
+        !GetColdStakingContract(pwallet.get(), contract, contractScript, &stakingKey, &ownerKey)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unknown cold-staking contract");
+    }
+    if (!pwallet->HaveKey(ownerKey)) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "This wallet does not contain the cold-staking owner key");
+    }
+
+    const CTxDestination destination = DecodeDestination(request.params[1].get_str());
+    if (!IsValidDestination(destination)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid withdrawal destination");
+    }
+    const CAmount amount = AmountFromValue(request.params[2]);
+    if (amount <= 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid withdrawal amount");
+    EnsureWalletIsUnlocked(pwallet.get());
+
+    std::vector<COutput> coins;
+    pwallet->AvailableCoins(coins, true);
+    std::vector<COutPoint> contractCoins;
+    CAmount contractBalance = 0;
+    for (const COutput& coin : coins) {
+        if (!coin.tx || !coin.tx->tx || !coin.fSpendable) continue;
+        const CTxOut& output = coin.tx->tx->vout[coin.i];
+        if (output.scriptPubKey != contractScript) continue;
+        contractCoins.emplace_back(coin.tx->GetHash(), coin.i);
+        contractBalance += output.nValue;
+    }
+    if (contractBalance < amount) {
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Cold-staking contract has insufficient funds");
+    }
+
+    CReserveKey changeKey(pwallet.get());
+    CTransactionRef transaction;
+    CAmount fee = 0;
+    int changePosition = -1;
+    std::string error;
+    CCoinControl coinControl;
+    coinControl.destChange = contract;
+    CAmount selected = 0;
+    bool created = false;
+    for (const COutPoint& outpoint : contractCoins) {
+        coinControl.Select(outpoint);
+        selected += pwallet->mapWallet.at(outpoint.hash).tx->vout[outpoint.n].nValue;
+        if (selected < amount) continue;
+        std::vector<CRecipient> recipients{{GetScriptForDestination(destination), amount, false}};
+        created = pwallet->CreateTransaction(recipients, transaction, changeKey, fee,
+                                             changePosition, error, coinControl);
+        if (created) break;
+    }
+    if (!created) {
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, error);
+    }
+
+    CValidationState state;
+    mapValue_t metadata;
+    metadata["comment"] = "cold-staking withdrawal";
+    if (!pwallet->CommitTransaction(transaction, std::move(metadata), {}, "", changeKey, g_connman.get(), state)) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("Transaction commit failed: %s", FormatStateMessage(state)));
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", transaction->GetHash().GetHex());
+    result.pushKV("amount", ValueFromAmount(amount));
+    result.pushKV("fee", ValueFromAmount(fee));
+    result.pushKV("contract_address", EncodeDestination(contract));
+    result.pushKV("destination_address", EncodeDestination(destination));
+    return result;
+}
+
 extern UniValue abortrescan(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
@@ -5406,6 +5722,10 @@ static const CRPCCommand commands[] =
     { "wallet",             "sethdseed",                        &sethdseed,                     {"newkeypool","seed"} },
     { "wallet",             "getdescriptorinfo",                &getdescriptorinfo,             {"descriptor"} },
     { "wallet",             "createcoldstakingaddress",         &createcoldstakingaddress,      {"owner_address","staker_address"} },
+    { "wallet",             "estimatecoldstakingsplit",        &estimatecoldstakingsplit,     {"amount","options"} },
+    { "wallet",             "delegatecoldstaking",             &delegatecoldstaking,          {"contract_address","amount","options"} },
+    { "wallet",             "listcoldstaking",                 &listcoldstaking,              {} },
+    { "wallet",             "withdrawcoldstaking",             &withdrawcoldstaking,          {"contract_address","destination_address","amount"} },
 
     /** Account functions (deprecated) */
     { "wallet",             "getaccountaddress",                &getaccountaddress,             {"account"} },
