@@ -52,3 +52,53 @@ withdrawcoldstaking "contract_address" "destination_address" 10
 For a short regtest run, pass `-coldstaketargetage=0` to the staking node. This
 changes only its local candidate-selection policy; consensus validation still
 enforces the network minimum age.
+
+## Automated safety coverage
+
+`feature_pos_staking.py` exercises the complete delegated-staking lifecycle with
+separate owner and staker nodes. In addition to Taproot staking, reward routing,
+P2P propagation and reindex validation, it asserts that:
+
+- the owner wallet reports `owner=true, staker=false`;
+- the staking wallet reports `owner=false, staker=true`;
+- `withdrawcoldstaking` is rejected by the staking wallet;
+- an owner withdrawal uses the empty (`OP_0`) owner-branch selector and confirms;
+- a wallet-file backup restores the cold-staking contract and owner capability.
+
+Run it with:
+
+```text
+python3 test/functional/test_runner.py feature_pos_staking.py
+```
+
+## Public testnet prerequisites
+
+The public testnet uses P2P port `18798`, Bech32 HRP `txpc`, a three-day
+consensus minimum stake age, and activates Taproot and cold staking from genesis.
+Do not reuse mainnet wallet keys or data directories.
+
+At least two publicly reachable bootstrap nodes are required before calling a
+testnet run public. Until DNS seeding is operational, distribute their addresses
+explicitly and start participants with one or more of:
+
+```text
+-addnode=<bootstrap-ip>:18798
+```
+
+Verify readiness on every participant:
+
+```text
+getconnectioncount
+getblockchaininfo
+getpeerinfo
+```
+
+The gate is: at least two independent peers, matching best block hash, and
+`initialblockdownload=false`. Do not fund or delegate testnet coins before this
+gate passes.
+
+On 2026-09-11 a clean testnet probe resolved zero addresses from the configured
+DNS seeds (`seed1.xpchain.co.kr`, `seed2.xpchain.co.kr`, and
+`seed3.xpchain.co.kr`) and remained at genesis with zero peers. Public testnet
+validation is therefore blocked on bootstrap-node/DNS deployment; this is an
+infrastructure prerequisite, not a consensus-test failure.

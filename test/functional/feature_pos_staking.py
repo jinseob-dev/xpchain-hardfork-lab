@@ -23,6 +23,8 @@ proof-of-stake block through the network and the disk paths, not just the mining
 """
 
 from decimal import Decimal
+import os
+import shutil
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -62,7 +64,7 @@ class PoSStakingTest(BitcoinTestFramework):
         # chunks to keep each call short.
         taproot_blocks = 200
         self.nodes[0].generatetoaddress(taproot_blocks, taproot_address)
-        self.check_delegation_split_rpc(contract)
+        withdrawal_txid = self.check_delegation_split_rpc(contract)
         remaining = REGTEST_SWITCH_HEIGHT - taproot_blocks
         while remaining > 0:
             batch = min(remaining, 250)
@@ -70,6 +72,7 @@ class PoSStakingTest(BitcoinTestFramework):
             remaining -= batch
         assert_equal(self.nodes[0].getblockcount(), REGTEST_SWITCH_HEIGHT)
         sync_blocks(self.nodes)
+        return withdrawal_txid
 
     def check_delegation_split_rpc(self, contract):
         """Create one delegation transaction with an amount-dependent split."""
@@ -110,6 +113,32 @@ class PoSStakingTest(BitcoinTestFramework):
         # The empty selector chooses the owner branch, not the delegated staking branch.
         assert_equal(withdrawn['vin'][0]['txinwitness'][-2], '')
         assert_equal(withdrawn['vin'][0]['txinwitness'][-1], contract['redeemScript'])
+        return withdrawal['txid']
+
+    def check_cold_stake_role_separation(self, contract, withdrawal_txid):
+        """Owner and staker wallets must expose mutually exclusive capabilities."""
+        self.log.info("Checking delegated owner/staker role separation")
+
+        owner_view = self.nodes[0].listcoldstaking()
+        staker_view = self.nodes[1].listcoldstaking()
+        assert_greater_than(len(owner_view['outputs']), 0)
+        assert_greater_than(len(staker_view['outputs']), 0)
+        assert all(output['owner'] and not output['staker']
+                   for output in owner_view['outputs'])
+        assert all(not output['owner'] and output['staker']
+                   for output in staker_view['outputs'])
+
+        # A staking-only wallet can make blocks but must never be able to take the
+        # owner branch of the contract, even when it supplies a valid destination.
+        assert_raises_rpc_error(
+            -4, "This wallet does not contain the cold-staking owner key",
+            self.nodes[1].withdrawcoldstaking,
+            contract['address'], contract['staker'], 1)
+
+        # The owner withdrawal created before the remaining PoW range was mined must
+        # have propagated and become part of the shared chain.
+        withdrawal = self.nodes[1].getrawtransaction(withdrawal_txid, True)
+        assert_greater_than(withdrawal['confirmations'], 0)
 
     def assert_pow_rejected_above_switch(self, address):
         """Above the switch height a template needs a coinstake, which mining RPCs lack.
@@ -222,6 +251,35 @@ class PoSStakingTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getbestblockhash(), block_hash)
         connect_nodes(self.nodes[0], 1)
 
+    def check_owner_backup_restores_contract(self, contract):
+        """A wallet-file backup must preserve the owner key and contract script."""
+        self.log.info("Checking cold-staking owner wallet backup recovery")
+        backup_path = os.path.join(self.options.tmpdir, 'cold-owner-wallet.bak')
+        restored_name = 'cold-owner-restored'
+        restored_wallet = os.path.join(
+            self.nodes[0].datadir, 'regtest', 'wallets', restored_name, 'wallet.dat')
+
+        self.nodes[0].backupwallet(backup_path)
+        self.nodes[0].createwallet(restored_name)
+        self.nodes[0].unloadwallet(restored_name)
+
+        self.stop_node(0)
+        shutil.copyfile(backup_path, restored_wallet)
+        self.start_node(0, extra_args=[
+            '-txindex', '-minting=0', '-wallet={}'.format(restored_name),
+            '-mocktime={}'.format(self.mocktime),
+        ])
+        connect_nodes(self.nodes[0], 1)
+        restored_rpc = self.nodes[0].get_wallet_rpc(restored_name)
+        restored_rpc.syncwithvalidationinterfacequeue()
+
+        restored_view = restored_rpc.listcoldstaking()
+        assert_greater_than(len(restored_view['outputs']), 0)
+        assert all(output['address'] == contract['address']
+                   for output in restored_view['outputs'])
+        assert all(output['owner'] and not output['staker']
+                   for output in restored_view['outputs'])
+
     def stake_one_cold_block(self, contract):
         """Stake on node 1, which has only the delegated staking key."""
         previous_height = self.nodes[0].getblockcount()
@@ -266,7 +324,8 @@ class PoSStakingTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getaddressinfo(contract['address'])['ismine'], True)
         assert_equal(self.nodes[0].getaddressinfo(contract['address'])['ismine'], False)
 
-        self.mine_pow_range(address, contract['address'], contract)
+        withdrawal_txid = self.mine_pow_range(address, contract['address'], contract)
+        self.check_cold_stake_role_separation(contract, withdrawal_txid)
         self.assert_pow_rejected_above_switch(address)
 
         staked_hash = self.stake_one_block()
@@ -276,8 +335,9 @@ class PoSStakingTest(BitcoinTestFramework):
 
         cold_hash = self.stake_one_cold_block(contract)
         self.check_reindex_revalidates(cold_hash)
+        self.check_owner_backup_restores_contract(contract)
 
-        self.log.info("Taproot and delegated cold staking, propagation and reindex all verified")
+        self.log.info("Taproot, delegated cold staking, propagation, reindex and owner recovery all verified")
 
 
 if __name__ == '__main__':
