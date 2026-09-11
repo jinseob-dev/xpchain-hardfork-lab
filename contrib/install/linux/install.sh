@@ -14,8 +14,17 @@ fi
 mkdir -p "${PREFIX}/bin"
 install -m 755 "${ROOT}/bin/"* "${PREFIX}/bin/"
 
+cat > "${PREFIX}/bin/xpchain-testnet" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TESTNET_DATADIR="${XPCHAIN_TESTNET_DATADIR:-${HOME}/.xpchain-testnet}"
+exec "${BIN_DIR}/xpchain-qt" -testnet -datadir="${TESTNET_DATADIR}" "$@"
+EOF
+chmod 755 "${PREFIX}/bin/xpchain-testnet"
+
 DESKTOP_DIR="${HOME}/.local/share/applications"
-if [[ -d "${DESKTOP_DIR}" && -f "${ROOT}/bin/xpchain-qt" ]]; then
+if [[ -f "${ROOT}/bin/xpchain-qt" ]]; then
   mkdir -p "${DESKTOP_DIR}"
   cat > "${DESKTOP_DIR}/xpchain-qt.desktop" <<EOF
 [Desktop Entry]
@@ -28,6 +37,18 @@ Terminal=false
 Categories=Finance;Network;
 EOF
   echo "Wrote ${DESKTOP_DIR}/xpchain-qt.desktop"
+
+  cat > "${DESKTOP_DIR}/xpchain-testnet.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=XPChain Testnet
+Comment=XPChain testnet wallet and node
+Exec=${PREFIX}/bin/xpchain-testnet
+Icon=wallet
+Terminal=false
+Categories=Finance;Network;
+EOF
+  echo "Wrote ${DESKTOP_DIR}/xpchain-testnet.desktop"
 fi
 
 echo ""
@@ -36,5 +57,6 @@ echo "Add to your shell profile:"
 echo "  export PATH=\"${PREFIX}/bin:\$PATH\""
 echo ""
 echo "Start GUI:  xpchain-qt"
+echo "Testnet:    xpchain-testnet"
 echo "Start node: xpchaind -daemon"
 echo "CLI:        xpchain-cli getwalletinfo"

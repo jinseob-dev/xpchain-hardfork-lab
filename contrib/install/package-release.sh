@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Package XPChain Core release artifacts with install helpers.
-# Usage: package-release.sh <linux|win64|win32> <tag> <output-dir-with-binaries>
+# Usage: package-release.sh <linux|linux-arm64|win64|win32> <tag> <output-dir-with-binaries>
 set -euo pipefail
 
 PLATFORM="${1:?platform}"
@@ -11,8 +11,13 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "${STAGING}"' EXIT
 
 case "${PLATFORM}" in
-  linux)
-    PKG="xpchain-${TAG}-linux-x86_64"
+  linux|linux-arm64)
+    if [[ "${PLATFORM}" == "linux-arm64" ]]; then
+      ARCH="arm64"
+    else
+      ARCH="x86_64"
+    fi
+    PKG="xpchain-${TAG}-linux-${ARCH}"
     mkdir -p "${STAGING}/${PKG}/bin"
     install -m 755 "${SRC}/xpchaind" "${SRC}/xpchain-cli" "${SRC}/xpchain-tx" "${STAGING}/${PKG}/bin/"
     if [[ -f "${SRC}/xpchain-qt" ]]; then

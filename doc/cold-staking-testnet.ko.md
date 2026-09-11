@@ -87,6 +87,28 @@ python3 test/functional/test_runner.py feature_pos_staking.py
 
 메인넷 지갑 키나 데이터 폴더를 테스트넷에서 재사용해서는 안 됩니다.
 
+## 참여자용 설치 패키지
+
+프리뷰 릴리스는 다음 네 플랫폼을 대상으로 빌드합니다. 모든 빌드 작업은 산출물의
+실제 CPU 아키텍처를 검사한 뒤 패키징해야 합니다.
+
+- Apple Silicon macOS: `*-testnet-macos-arm64.dmg`
+- Windows Intel/AMD 64비트: `*-win64-setup.exe` 또는 `*-win64.zip`
+- Linux ARM64: `*-linux-arm64.tar.gz`
+- Linux Intel/AMD 64비트: `*-linux-x86_64.tar.gz`
+
+macOS에서는 `XPChain-Testnet.app`, Windows에서는 시작 메뉴의 `XPChain Core
+(testnet, 64-bit)`, Linux에서는 `xpchain-testnet`을 실행합니다. 이 실행 항목들은
+자동으로 `-testnet`을 적용하고 운영체제별 테스트넷 전용 데이터 폴더를 사용합니다.
+
+- macOS: `~/Library/Application Support/XPChain-Testnet`
+- Windows: `%APPDATA%\XPChain-Testnet`
+- Linux: `~/.xpchain-testnet`
+
+설치 파일의 체크섬은 릴리스에 포함된 `SHA256SUMS.txt`와 반드시 비교해야 합니다.
+현재 프리뷰 빌드는 임시 서명이므로, 정식 배포 전에는 Apple Developer ID 서명과
+공증 및 Windows Authenticode 서명이 별도로 필요합니다.
+
 공개 테스트넷으로 운영하려면 외부에서 접속할 수 있는 부트스트랩 노드가 최소
 2대 필요합니다. DNS 시드가 준비되기 전에는 부트스트랩 노드 주소를 참여자에게
 직접 배포하고 다음 옵션으로 연결합니다.

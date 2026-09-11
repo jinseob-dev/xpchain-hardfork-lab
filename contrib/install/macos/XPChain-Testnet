@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+APP_BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+TESTNET_DATADIR=${XPCHAIN_TESTNET_DATADIR:-"${HOME}/Library/Application Support/XPChain-Testnet"}
+
+exec "${APP_BIN_DIR}/XPChain-Qt-bin" -testnet -datadir="${TESTNET_DATADIR}" "$@"

@@ -11,6 +11,11 @@ on:
         description: 'Preview tag name (example: preview-install)'
         required: true
         type: string
+      publish:
+        description: 'Publish a public GitHub prerelease after all builds pass'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -68,6 +73,60 @@ jobs:
         with:
           name: linux-x86_64
           path: xpchain-*-linux-x86_64.tar.gz
+
+  linux-arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "aarch64"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libtool autotools-dev automake pkg-config bsdmainutils \
+            curl git python3 bison
+
+      - name: Cache depends
+        uses: actions/cache@v4
+        with:
+          path: |
+            depends/built
+            depends/sources
+          key: depends-linux-arm64-${{ hashFiles('depends/packages/*.mk') }}
+          restore-keys: depends-linux-arm64-
+
+      - name: Build depends
+        run: |
+          cd depends
+          make HOST=aarch64-linux-gnu FALLBACK_DOWNLOAD_PATH=https://bitcoincore.org/depends-sources -j"$(nproc)"
+
+      - name: Build
+        run: |
+          ./autogen.sh
+          CONFIG_SITE=$PWD/depends/aarch64-linux-gnu/share/config.site \
+            ./configure --prefix=/ --with-gui=qt5
+          make -j"$(nproc)"
+
+      - name: Verify and package installable tarball
+        run: |
+          file src/xpchaind | grep -q 'ARM aarch64'
+          mkdir -p dist
+          cp src/xpchaind src/xpchain-cli src/xpchain-tx dist/
+          cp src/qt/xpchain-qt dist/ 2>/dev/null || true
+          strip dist/* || true
+          chmod +x contrib/install/package-release.sh
+          ./contrib/install/package-release.sh linux-arm64 "${RELEASE_TAG}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: xpchain-*-linux-arm64.tar.gz
 
   windows64:
     name: Windows x64
@@ -139,7 +198,7 @@ jobs:
           path: win-upload/*
 
   macos:
-    name: macOS DMG
+    name: macOS Apple Silicon DMG
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,6 +209,9 @@ jobs:
         run: |
           brew update
           brew install autoconf automake libtool pkg-config openssl@3 libevent boost berkeley-db@5 miniupnpc protobuf@21 qt@5 qrencode create-dmg
+
+      - name: Verify Apple Silicon runner
+        run: test "$(uname -m)" = "arm64"
 
       - name: Build
         run: |
@@ -198,6 +260,7 @@ jobs:
             dep_base="$(basename "${dep}")"
             install_name_tool -change "${dep}" "@executable_path/../Frameworks/${dep_base}" "${APP_BIN}" || true
           done
+          file "${APP_BIN}" | grep -q 'arm64'
           codesign --force --deep --sign - --timestamp=none "${APP_BUNDLE}"
           mkdir -p dmg-src
           ditto "${APP_BUNDLE}" "dmg-src/${APP_BUNDLE}"
@@ -208,20 +271,44 @@ jobs:
             --window-pos 200 120 --window-size 560 360 --icon-size 120 \
             --icon "${APP_BUNDLE}" 140 170 --icon "Applications" 420 170 \
             --hide-extension "${APP_BUNDLE}" --app-drop-link 420 170 \
-            "xpchain-${TAG}-macos.dmg" dmg-src
-          tar -C dist -czf "xpchain-${TAG}-macos.tar.gz" xpchaind xpchain-cli xpchain-tx xpchain-qt
+            "xpchain-${TAG}-macos-arm64.dmg" dmg-src
+
+          TESTNET_APP="XPChain-Testnet.app"
+          ditto "${APP_BUNDLE}" "${TESTNET_APP}"
+          mv "${TESTNET_APP}/Contents/MacOS/XPChain-Qt" "${TESTNET_APP}/Contents/MacOS/XPChain-Qt-bin"
+          cp contrib/install/macos/XPChain-Testnet "${TESTNET_APP}/Contents/MacOS/XPChain-Testnet"
+          chmod 755 "${TESTNET_APP}/Contents/MacOS/XPChain-Testnet"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable XPChain-Testnet' "${TESTNET_APP}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleName XPChain Testnet' "${TESTNET_APP}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName XPChain Testnet' "${TESTNET_APP}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier io.xpchain.XPChain-Testnet' "${TESTNET_APP}/Contents/Info.plist"
+          codesign --force --deep --sign - --timestamp=none "${TESTNET_APP}"
+          codesign --verify --deep --strict --verbose=2 "${TESTNET_APP}"
+          mkdir -p testnet-dmg-src
+          ditto "${TESTNET_APP}" "testnet-dmg-src/${TESTNET_APP}"
+          cp contrib/install/README-INSTALL.txt testnet-dmg-src/
+          ln -s /Applications testnet-dmg-src/Applications
+          create-dmg \
+            --volname "XPChain Testnet" \
+            --window-pos 200 120 --window-size 560 360 --icon-size 120 \
+            --icon "${TESTNET_APP}" 140 170 --icon "Applications" 420 170 \
+            --hide-extension "${TESTNET_APP}" --app-drop-link 420 170 \
+            "xpchain-${TAG}-testnet-macos-arm64.dmg" testnet-dmg-src
+          tar -C dist -czf "xpchain-${TAG}-macos-arm64.tar.gz" xpchaind xpchain-cli xpchain-tx xpchain-qt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos
+          name: macos-arm64
           path: |
-            xpchain-*-macos.dmg
-            xpchain-*-macos.tar.gz
+            xpchain-*-macos-arm64.dmg
+            xpchain-*-macos-arm64.tar.gz
+            xpchain-*-testnet-macos-arm64.dmg
 
   publish:
     name: Publish public prerelease
+    if: github.event_name == 'push' || inputs.publish == true
     runs-on: ubuntu-22.04
-    needs: [linux, windows64, macos]
+    needs: [linux, linux-arm64, windows64, macos]
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -244,9 +331,11 @@ jobs:
 
             | OS | File | Install |
             |----|------|---------|
-            | Linux | `*-linux-x86_64.tar.gz` | extract → `./install.sh` |
+            | Linux x86-64 | `*-linux-x86_64.tar.gz` | extract → `./install.sh` |
+            | Linux ARM64 | `*-linux-arm64.tar.gz` | extract → `./install.sh` |
             | Windows | `*-win64-setup.exe` or `*-win64.zip` | run setup or `install.bat` |
-            | macOS | `*-macos.dmg` | drag **XPChain-Core.app** to Applications |
+            | macOS Apple Silicon | `*-macos-arm64.dmg` | drag **XPChain-Core.app** to Applications |
+            | macOS testnet | `*-testnet-macos-arm64.dmg` | drag **XPChain-Testnet.app** to Applications |
 
             See `README-INSTALL.txt` inside each archive. Not a formal v0.27.0 release.
 

@@ -28,5 +28,13 @@ $shortcut.TargetPath = Join-Path $Prefix "xpchain-qt.exe"
 $shortcut.WorkingDirectory = $Prefix
 $shortcut.Save()
 
+$testnetDataDir = Join-Path $env:APPDATA "XPChain-Testnet"
+$testnetShortcut = $shell.CreateShortcut((Join-Path $startMenu "XPChain Testnet.lnk"))
+$testnetShortcut.TargetPath = Join-Path $Prefix "xpchain-qt.exe"
+$testnetShortcut.Arguments = "-testnet -datadir=`"$testnetDataDir`""
+$testnetShortcut.WorkingDirectory = $Prefix
+$testnetShortcut.Save()
+
 Write-Host "Installed to $Prefix"
 Write-Host "Launch: $Prefix\xpchain-qt.exe"
+Write-Host "Testnet shortcut: XPChain Testnet"

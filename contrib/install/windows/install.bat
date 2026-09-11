@@ -18,8 +18,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%ProgramData%\Microsoft\Windows\Start Menu\Programs\XPChain Core.lnk');" ^
   "$s.TargetPath='%PREFIX%\xpchain-qt.exe'; $s.WorkingDirectory='%PREFIX%'; $s.Save()" 2>nul
 
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%ProgramData%\Microsoft\Windows\Start Menu\Programs\XPChain Testnet.lnk');" ^
+  "$s.TargetPath='%PREFIX%\xpchain-qt.exe'; $s.Arguments='-testnet -datadir=^"%APPDATA%\XPChain-Testnet^"'; $s.WorkingDirectory='%PREFIX%'; $s.Save()" 2>nul
+
 echo.
 echo Installed. Start menu shortcut: XPChain Core
+echo Testnet shortcut: XPChain Testnet
 echo Or run: "%PREFIX%\xpchain-qt.exe"
 echo Daemon: "%PREFIX%\daemon\xpchaind.exe"
 endlocal
