@@ -25,12 +25,18 @@ static constexpr int64_t DEFAULT_COLD_STAKE_TARGET_AGE_DAYS = 32;
 static constexpr int64_t DEFAULT_COLD_STAKE_FALLBACK_AGE_DAYS = 3;
 static constexpr int64_t DEFAULT_COLD_STAKE_FALLBACK_DELAY_MINUTES = 15;
 
-static unsigned int GetnBits(const CBlockIndex* pIndexLast, const Consensus::Params& params)
+static unsigned int GetnBits(const CBlockIndex* pIndexLast, uint32_t nTime, const Consensus::Params& params)
 {
     assert(pIndexLast);
-    assert(pIndexLast->pprev);
     assert(pIndexLast->nHeight + 1 > params.nSwitchHeight);
-    return CalculateNextWorkRequired(pIndexLast, pIndexLast->pprev->GetBlockTime(), params);
+
+    // Use the same entry point as block validation. This matters for the first
+    // PoS block: pIndexLast is still a PoW block at the switch height, so calling
+    // CalculateNextWorkRequired directly would select the PoW retarget formula
+    // while validation selects the testnet min-difficulty rule for this block.
+    CBlockHeader candidate;
+    candidate.nTime = nTime;
+    return GetNextWorkRequired(pIndexLast, &candidate, params);
 }
 
 static bool GetPrevBlockIndex(const uint256& hashBlock, CBlockIndex** pIndex)
@@ -74,8 +80,8 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
             CBlockIndex* pIndexLast = chainActive.Tip();
             assert(pIndexLast);
 
-            unsigned int nBits = GetnBits(pIndexLast, Params().GetConsensus());
             uint32_t nTime = std::max(GetAdjustedTime(), pIndexLast->GetMedianTimePast() + 1);
+            unsigned int nBits = GetnBits(pIndexLast, nTime, Params().GetConsensus());
             const int64_t targetAgeDays = std::max<int64_t>(0, std::min<int64_t>(3650,
                 gArgs.GetArg("-coldstaketargetage", DEFAULT_COLD_STAKE_TARGET_AGE_DAYS)));
             const int64_t fallbackAgeDays = std::max<int64_t>(0, std::min<int64_t>(3650,

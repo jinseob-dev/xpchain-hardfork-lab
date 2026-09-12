@@ -258,7 +258,6 @@ static CScript PushAll(const std::vector<valtype>& values)
 
 bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreator& creator, const CScript& fromPubKey, SignatureData& sigdata)
 {
-    LogPrintf("ProduceSignature: Entering for script %s\n", HexStr(fromPubKey));
     if (sigdata.complete) return true;
 
     std::vector<valtype> result;

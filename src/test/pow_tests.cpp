@@ -82,6 +82,36 @@ BOOST_AUTO_TEST_CASE(testnet_genesis_uses_easy_pow_limit)
     BOOST_CHECK_EQUAL(previous.nBits, expected);
 }
 
+BOOST_AUTO_TEST_CASE(testnet_pow_to_pos_transition_uses_validation_difficulty)
+{
+    const auto testParams = CreateChainParams(CBaseChainParams::TESTNET);
+    const Consensus::Params& consensus = testParams->GetConsensus();
+    const unsigned int powLimit = UintToArith256(consensus.powLimit).GetCompact();
+
+    CBlockIndex beforeSwitch;
+    beforeSwitch.nHeight = consensus.nSwitchHeight - 1;
+    beforeSwitch.nTime = testParams->GenesisBlock().nTime + beforeSwitch.nHeight;
+    beforeSwitch.nBits = powLimit;
+
+    CBlockIndex switchBlock;
+    switchBlock.pprev = &beforeSwitch;
+    switchBlock.nHeight = consensus.nSwitchHeight;
+    switchBlock.nTime = beforeSwitch.nTime + 1;
+    switchBlock.nBits = powLimit;
+
+    CBlockHeader firstPoS;
+    firstPoS.nTime = switchBlock.nTime + consensus.nPowTargetSpacing * 2 + 1;
+
+    // The first PoS candidate is validated while its previous index is still a
+    // PoW-height index. Its producer must therefore use GetNextWorkRequired,
+    // including the testnet delayed-block rule, rather than call the retarget
+    // calculation directly.
+    BOOST_CHECK_EQUAL(GetNextWorkRequired(&switchBlock, &firstPoS, consensus), powLimit);
+    BOOST_CHECK_NE(
+        CalculateNextWorkRequired(&switchBlock, beforeSwitch.GetBlockTime(), consensus),
+        GetNextWorkRequired(&switchBlock, &firstPoS, consensus));
+}
+
 /* Test the constraint on the lower bound for actual time taken */
 //BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
 //{
