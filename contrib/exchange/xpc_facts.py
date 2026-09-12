@@ -56,9 +56,9 @@ NETWORKS: Dict[str, Dict[str, Any]] = {
         "bech32_hrp": "txpc",
         "legacy_pubkey_version": 138,
         "legacy_script_version": 88,
-        "dns_seeds": [],
-        "genesis_hash": None,  # filled only when needed from node
-        "message_start_hex": "fc87bbc1",
+        "dns_seeds": ["158.179.20.33", "207.211.156.219"],
+        "genesis_hash": "17e8ac05fcd037f9b1fe25da878bc6b8e1ebca64083a7fe3168bf509a74a53be",
+        "message_start_hex": "fabfb5da",
         "website": "https://www.xpchain.co.kr/",
     },
     "regtest": {

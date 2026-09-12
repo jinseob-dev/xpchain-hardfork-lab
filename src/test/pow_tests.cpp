@@ -49,20 +49,27 @@ BOOST_AUTO_TEST_CASE(get_next_work_pow_limit)
     BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1d00ffffU);
 }
 
-BOOST_AUTO_TEST_CASE(always_min_difficulty_testchains)
+BOOST_AUTO_TEST_CASE(testnet_genesis_uses_easy_pow_limit)
 {
     const auto mainParams = CreateChainParams(CBaseChainParams::MAIN);
     const auto testParams = CreateChainParams(CBaseChainParams::TESTNET);
     const auto regtestParams = CreateChainParams(CBaseChainParams::REGTEST);
 
-    BOOST_CHECK(!mainParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
-    BOOST_CHECK(testParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
-    BOOST_CHECK(regtestParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
+    BOOST_CHECK(testParams->GenesisBlock().GetHash() != mainParams->GenesisBlock().GetHash());
+    BOOST_CHECK(testParams->GenesisBlock().GetHash() != regtestParams->GenesisBlock().GetHash());
+    BOOST_CHECK_EQUAL(testParams->GenesisBlock().GetHash().GetHex(), "17e8ac05fcd037f9b1fe25da878bc6b8e1ebca64083a7fe3168bf509a74a53be");
+    BOOST_CHECK_EQUAL(testParams->MessageStart()[0], 0xfa);
+    BOOST_CHECK_EQUAL(testParams->MessageStart()[1], 0xbf);
+    BOOST_CHECK_EQUAL(testParams->MessageStart()[2], 0xb5);
+    BOOST_CHECK_EQUAL(testParams->MessageStart()[3], 0xda);
+    BOOST_REQUIRE_EQUAL(testParams->DNSSeeds().size(), 2U);
+    BOOST_CHECK_EQUAL(testParams->DNSSeeds()[0], "158.179.20.33");
+    BOOST_CHECK_EQUAL(testParams->DNSSeeds()[1], "207.211.156.219");
 
     CBlockIndex previous;
-    previous.nHeight = 1;
-    previous.nTime = 1700000000;
-    previous.nBits = 0x1d00ffff;
+    previous.nHeight = 0;
+    previous.nTime = testParams->GenesisBlock().nTime;
+    previous.nBits = testParams->GenesisBlock().nBits;
 
     CBlockHeader candidate;
     candidate.nTime = previous.nTime + 1;
@@ -72,6 +79,7 @@ BOOST_AUTO_TEST_CASE(always_min_difficulty_testchains)
     BOOST_CHECK_EQUAL(
         GetNextWorkRequired(&previous, &candidate, testParams->GetConsensus()),
         expected);
+    BOOST_CHECK_EQUAL(previous.nBits, expected);
 }
 
 /* Test the constraint on the lower bound for actual time taken */

@@ -23,7 +23,7 @@ IsPoSHeight(n) := n > nSwitchHeight        // src/validation.cpp
 | 네트워크 | `nSwitchHeight` | 첫 PoS 높이 |
 |---|---|---|
 | main | 10275 | 10276 |
-| test | 10275 | 10276 |
+| test | 200 | 201 |
 | regtest | 1680 | 1681 |
 
 즉 `nSwitchHeight` 이하는 PoW 전용, 초과는 **PoS 전용**이다. 혼합 구간은 없다.
@@ -168,7 +168,7 @@ nTimeBlockFrom + nStakeMinAge > nTimeTx  ⇒  실패
 | 네트워크 | `nStakeMinAge` | `nStakeMaxAge` |
 |---|---|---|
 | main | 259 200 (3일) | 5 184 000 (60일) |
-| test | 259 200 (3일) | 5 184 000 (60일) |
+| test | 3 600 (1시간) | 5 184 000 (60일) |
 | regtest | 10 (10초) | 8 640 000 (100일) |
 
 ### 3.2 해시 입력 (직렬화 순서)

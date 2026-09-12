@@ -46,9 +46,9 @@ static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesi
  *     CTxOut(nValue=50.00000000, scriptPubKey=0x5F1DF16B2B704C8A578D0B)
  *   vMerkleTree: 4a5e1e
  */
-static CBlock CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward)
+static CBlock CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward,
+                                 const char* pszTimestamp = "Xpc developers are Pretty Cute. Of course it is a joke. \"Now\" yet.")
 {
-    const char* pszTimestamp = "Xpc developers are Pretty Cute. Of course it is a joke. \"Now\" yet.";
     const CScript genesisOutputScript = CScript() << ParseHex("04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f") << OP_CHECKSIG;
     return CreateGenesisBlock(pszTimestamp, genesisOutputScript, nTime, nNonce, nBits, nVersion, genesisReward);
 }
@@ -90,7 +90,6 @@ public:
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.fPowNoRetargeting = false;
-        consensus.fPowAlwaysMinDifficultyBlocks = false;
         consensus.nRuleChangeActivationThreshold = 19152; // 95% of 20160
         consensus.nMinerConfirmationWindow = 20160; // nPowTargetTimespan / nPowTargetSpacing
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -205,12 +204,14 @@ public:
         consensus.BIP66Height = 0;
         consensus.TaprootHeight = 0; // Active from genesis on testnet
         consensus.ColdStakingHeight = 0; // Active from genesis on testnet
-        consensus.powLimit = uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        // This is a new, isolated hardfork-lab testnet. Its genesis target is
+        // the same easy target, so the standard testnet difficulty algorithm
+        // can create consecutive blocks without an RPC-only override.
+        consensus.powLimit = uint256S("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.fPowNoRetargeting = false;
-        consensus.fPowAlwaysMinDifficultyBlocks = true;
         consensus.nRuleChangeActivationThreshold = 15120; // 75% for testchains
         consensus.nMinerConfirmationWindow = 20160; // nPowTargetTimespan / nPowTargetSpacing
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -229,12 +230,12 @@ public:
 
         // Deployment of Check dup Txin
         consensus.vDeployments[Consensus::DEPLOYMENT_CHECK_DUP_TXIN].bit = 3;
-        consensus.vDeployments[Consensus::DEPLOYMENT_CHECK_DUP_TXIN].nStartTime = 1554076800; // April 1, 2019
-        consensus.vDeployments[Consensus::DEPLOYMENT_CHECK_DUP_TXIN].nTimeout = 1585699200;
+        consensus.vDeployments[Consensus::DEPLOYMENT_CHECK_DUP_TXIN].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
+        consensus.vDeployments[Consensus::DEPLOYMENT_CHECK_DUP_TXIN].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
         //  Block Signature addition
         consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].bit = 2;
-        consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].nStartTime = 1554076800; // April 1, 2019;
-        consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].nTimeout = 1585699200;
+        consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].nStartTime = Consensus::BIP9Deployment::ALWAYS_ACTIVE;
+        consensus.vDeployments[Consensus::BLOCK_SIGNATURE_ADDITION].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
 
         // The best chain should have at least this much work.
         consensus.nMinimumChainWork = uint256S("0x00");
@@ -242,29 +243,30 @@ public:
         // By default assume that the signatures in ancestors of this block are valid.
         consensus.defaultAssumeValid = uint256S("0x00");
 
-        consensus.nSwitchHeight = 10275;
+        consensus.nSwitchHeight = 200;
 
-        consensus.nStakeMinAge = 60 * 60 * 24 * 3;
+        consensus.nStakeMinAge = 60 * 60;
         consensus.nStakeMaxAge = 60 * 60 * 24 * 60;
 
-        pchMessageStart[0] = 0xfc;
-        pchMessageStart[1] = 0x87;
-        pchMessageStart[2] = 0xbb;
-        pchMessageStart[3] = 0xc1;
+        pchMessageStart[0] = 0xfa;
+        pchMessageStart[1] = 0xbf;
+        pchMessageStart[2] = 0xb5;
+        pchMessageStart[3] = 0xda;
         nDefaultPort = 18798;
         nPruneAfterHeight = 1000;
 
-        genesis = CreateGenesisBlock(1540301756, 3632110353, 0x1d00ffff, 4, 50 * COIN);
+        genesis = CreateGenesisBlock(1789171200, 1, 0x207fffff, 4, 50 * COIN,
+                                     "XPChain hardfork lab public testnet 2026-09-12");
         consensus.hashGenesisBlock = genesis.GetHash();
-        assert(consensus.hashGenesisBlock == uint256S("0x00000000f04d3bdebf907f79b4b096a05d763ac890612202ff9c9cc685221617"));
-        assert(genesis.hashMerkleRoot == uint256S("0xdaa610662c202dd51c892e6ff17ac1812a3ddcb998ec4923a3a315c409019739"));
+        assert(consensus.hashGenesisBlock == uint256S("0x17e8ac05fcd037f9b1fe25da878bc6b8e1ebca64083a7fe3168bf509a74a53be"));
+        assert(genesis.hashMerkleRoot == uint256S("0xbafe3dce86375ebfba0a17a6ab0a37f75469117848bc211a41fd359c61677194"));
 
         vFixedSeeds.clear();
         vSeeds.clear();
-        // nodes with support for servicebits filtering should be at the top
-        vSeeds.emplace_back("seed1.xpchain.co.kr");
-        vSeeds.emplace_back("seed2.xpchain.co.kr");
-        vSeeds.emplace_back("seed3.xpchain.co.kr");
+        // Hardfork-lab bootstrap nodes. Numeric seeds avoid accidentally
+        // discovering peers from the retired legacy XPChain testnet.
+        vSeeds.emplace_back("158.179.20.33");
+        vSeeds.emplace_back("207.211.156.219");
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,138);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<unsigned char>(1,88);
@@ -286,12 +288,7 @@ public:
             }
         };
 
-        chainTxData = ChainTxData{
-            // Data from rpc: getchaintxstats 4096 ae7320f5f9476d7e45a3985befb5c58663a71924dc7c31ab2450eed95fc6a9c8
-            /* nTime    */ 1555366728,
-            /* nTxCount */ 400660,
-            /* dTxRate  */ 0.06009108481724461
-        };
+        chainTxData = ChainTxData{0, 0, 0};
 
         /* enable fallback fee on testnet */
         m_fallback_fee_enabled = true;
@@ -316,7 +313,6 @@ public:
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.fPowNoRetargeting = true;
-        consensus.fPowAlwaysMinDifficultyBlocks = true;
         consensus.nRuleChangeActivationThreshold = 108; // 75% for testchains
         consensus.nMinerConfirmationWindow = 144; // Faster than normal for regtest (144 instead of 2016)
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;

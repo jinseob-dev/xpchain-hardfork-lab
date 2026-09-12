@@ -34,7 +34,7 @@ repository.
 | RPC port | 8762 | 18762 | 28762 |
 | Bech32 HRP | `xpc` | `txpc` | `xpcrt` |
 | Block time | ~60s | ~60s | instant (mining) |
-| Magic bytes | `fc87bac0` | `fc87bbc1` | `fc87bcc1` |
+| Magic bytes | `fc87bac0` | `fabfb5da` | `fc87bcc1` |
 | DNS seeds | seed1/2/3.xpchain.co.kr | — | — |
 
 - Genesis (main): `000000009f4a28557aad6be5910c39d40e8a44e596d5ad485a9e4a7d4d72937c`

@@ -193,14 +193,14 @@ BOOST_AUTO_TEST_CASE(pos_height_switch_is_strictly_greater_than)
     }
 }
 
-BOOST_AUTO_TEST_CASE(pos_switch_heights_are_unchanged)
+BOOST_AUTO_TEST_CASE(pos_switch_heights_match_network_policy)
 {
     BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::MAIN)->GetConsensus().nSwitchHeight, 10275);
-    BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::TESTNET)->GetConsensus().nSwitchHeight, 10275);
+    BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::TESTNET)->GetConsensus().nSwitchHeight, 200);
     BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus().nSwitchHeight, 1680);
 }
 
-BOOST_AUTO_TEST_CASE(stake_age_limits_are_unchanged)
+BOOST_AUTO_TEST_CASE(stake_age_limits_match_network_policy)
 {
     const auto main_params = CreateChainParams(CBaseChainParams::MAIN);
     const Consensus::Params& main = main_params->GetConsensus();
@@ -209,7 +209,7 @@ BOOST_AUTO_TEST_CASE(stake_age_limits_are_unchanged)
 
     const auto test_params = CreateChainParams(CBaseChainParams::TESTNET);
     const Consensus::Params& test = test_params->GetConsensus();
-    BOOST_CHECK_EQUAL(test.nStakeMinAge, 60 * 60 * 24 * 3);
+    BOOST_CHECK_EQUAL(test.nStakeMinAge, 60 * 60);
     BOOST_CHECK_EQUAL(test.nStakeMaxAge, 60 * 60 * 24 * 60);
 
     const auto regtest_params = CreateChainParams(CBaseChainParams::REGTEST);

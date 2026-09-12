@@ -75,13 +75,15 @@ python3 test/functional/test_runner.py feature_pos_staking.py
 
 ## Public testnet prerequisites
 
-The public testnet uses P2P port `18798`, Bech32 HRP `txpc`, a three-day
-consensus minimum stake age, and activates Taproot and cold staking from genesis.
-Do not reuse mainnet wallet keys or data directories.
+The hardfork-lab public testnet uses P2P port `18798`, Bech32 HRP `txpc`, a
+one-hour consensus minimum stake age, and activates Taproot and cold staking
+from genesis. Proof of Stake starts at height `201`, after 200 easy Proof-of-Work
+bootstrap blocks. Its genesis block and network magic are intentionally distinct
+from both mainnet and the retired legacy XPChain testnet. Do not reuse mainnet
+wallet keys or data directories.
 
-At least two publicly reachable bootstrap nodes are required before calling a
-testnet run public. Until DNS seeding is operational, distribute their addresses
-explicitly and start participants with one or more of:
+The preview client contains the two current hardfork-lab bootstrap IPs as numeric
+seeds. They can also be supplied explicitly with one or more of:
 
 ```text
 -addnode=<bootstrap-ip>:18798
@@ -99,8 +101,7 @@ The gate is: at least two independent peers, matching best block hash, and
 `initialblockdownload=false`. Do not fund or delegate testnet coins before this
 gate passes.
 
-On 2026-09-11 a clean testnet probe resolved zero addresses from the configured
-DNS seeds (`seed1.xpchain.co.kr`, `seed2.xpchain.co.kr`, and
-`seed3.xpchain.co.kr`) and remained at genesis with zero peers. Public testnet
-validation is therefore blocked on bootstrap-node/DNS deployment; this is an
-infrastructure prerequisite, not a consensus-test failure.
+The retired `seed1`/`seed2`/`seed3.xpchain.co.kr` DNS entries are not used by
+this isolated network. Before starting the new network, every participant must
+stop the old preview client and reset only its testnet chain data. Wallet backups
+must be retained separately.

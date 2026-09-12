@@ -14,9 +14,6 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
 {
     assert(pindexLast != nullptr);
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
-    if (params.fPowAlwaysMinDifficultyBlocks)
-        return nProofOfWorkLimit;
-
     bool fProofOfStake = pindexLast->nHeight > params.nSwitchHeight;
     // Only change once per difficulty adjustment interval
     if (!fProofOfStake)
