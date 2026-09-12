@@ -90,6 +90,7 @@ public:
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.fPowNoRetargeting = false;
+        consensus.fPowAlwaysMinDifficultyBlocks = false;
         consensus.nRuleChangeActivationThreshold = 19152; // 95% of 20160
         consensus.nMinerConfirmationWindow = 20160; // nPowTargetTimespan / nPowTargetSpacing
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -209,6 +210,7 @@ public:
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.fPowNoRetargeting = false;
+        consensus.fPowAlwaysMinDifficultyBlocks = true;
         consensus.nRuleChangeActivationThreshold = 15120; // 75% for testchains
         consensus.nMinerConfirmationWindow = 20160; // nPowTargetTimespan / nPowTargetSpacing
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
@@ -314,6 +316,7 @@ public:
         consensus.nPowTargetSpacing = 60;
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.fPowNoRetargeting = true;
+        consensus.fPowAlwaysMinDifficultyBlocks = true;
         consensus.nRuleChangeActivationThreshold = 108; // 75% for testchains
         consensus.nMinerConfirmationWindow = 144; // Faster than normal for regtest (144 instead of 2016)
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;

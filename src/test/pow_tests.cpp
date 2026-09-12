@@ -49,6 +49,31 @@ BOOST_AUTO_TEST_CASE(get_next_work_pow_limit)
     BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, chainParams->GetConsensus()), 0x1d00ffffU);
 }
 
+BOOST_AUTO_TEST_CASE(always_min_difficulty_testchains)
+{
+    const auto mainParams = CreateChainParams(CBaseChainParams::MAIN);
+    const auto testParams = CreateChainParams(CBaseChainParams::TESTNET);
+    const auto regtestParams = CreateChainParams(CBaseChainParams::REGTEST);
+
+    BOOST_CHECK(!mainParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
+    BOOST_CHECK(testParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
+    BOOST_CHECK(regtestParams->GetConsensus().fPowAlwaysMinDifficultyBlocks);
+
+    CBlockIndex previous;
+    previous.nHeight = 1;
+    previous.nTime = 1700000000;
+    previous.nBits = 0x1d00ffff;
+
+    CBlockHeader candidate;
+    candidate.nTime = previous.nTime + 1;
+
+    const unsigned int expected =
+        UintToArith256(testParams->GetConsensus().powLimit).GetCompact();
+    BOOST_CHECK_EQUAL(
+        GetNextWorkRequired(&previous, &candidate, testParams->GetConsensus()),
+        expected);
+}
+
 /* Test the constraint on the lower bound for actual time taken */
 //BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
 //{
