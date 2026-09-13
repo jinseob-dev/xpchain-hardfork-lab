@@ -54,6 +54,13 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
     LogPrintf("CPUMiner started for proof-of-stake\n");
     RenameThread("xpchain-stake-minter");
 
+    int64_t lastDiagnosticLog = 0;
+    uint64_t diagnosticKernelChecks = 0;
+    uint64_t diagnosticKernelMatches = 0;
+    uint64_t diagnosticCoinstakeFailures = 0;
+    uint64_t diagnosticBlockTemplateFailures = 0;
+    uint64_t diagnosticBlockSubmissionFailures = 0;
+
     try
     {
         while (true)
@@ -99,33 +106,46 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
             std::vector<StakeCandidate> vCandidates;
             wallet->GetStakeCandidates(vCandidates);
 
+            size_t coldCandidates = 0;
+            size_t missingBlockIndex = 0;
+            size_t immatureColdCandidates = 0;
+            size_t blockReadFailures = 0;
+
             for (const StakeCandidate& candidate : vCandidates) {
+                if (candidate.isColdStake) ++coldCandidates;
                 CBlockIndex* pprevIndex;
                 if (!GetPrevBlockIndex(candidate.hashBlock, &pprevIndex)) {
+                    ++missingBlockIndex;
                     continue;
                 }
                 if (candidate.isColdStake &&
                     int64_t{nTime} < pprevIndex->GetBlockTime() + coldStakeTargetAge) {
+                    ++immatureColdCandidates;
                     continue;
                 }
                 uint256 hashProofOfStake;
                 CBlock prevblock;
                 assert(pprevIndex);
                 if (!ReadBlockFromDisk(prevblock, pprevIndex, Params().GetConsensus())) {
+                    ++blockReadFailures;
                     continue;
                 }
+                ++diagnosticKernelChecks;
                 if (CheckStakeKernelHash(nBits, pprevIndex->GetBlockTime(), GetSizeOfCompactSize(prevblock.vtx.size()) + sizeof(CBlockHeader), candidate.txout.nValue, candidate.outpoint.n, nTime, hashProofOfStake))
                 {
+                    ++diagnosticKernelMatches;
                     CScript scriptDummy;
                     CAmount nFees;
                     CTransactionRef txCoinStake;
                     if (!wallet->CreateCoinStake(candidate, txCoinStake, nFees))
                     {
+                        ++diagnosticCoinstakeFailures;
                         continue;
                     }
                     std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(Params()).CreateNewBlock(scriptDummy, wallet.get(), nTime, nBits, txCoinStake, nFees, pIndexLast));
                     if (!pblocktemplate.get())
                     {
+                        ++diagnosticBlockTemplateFailures;
                         continue;
                     }
                     else
@@ -134,12 +154,39 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
                         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(*pblock);
                         if (!ProcessNewBlock(Params(), shared_pblock, true, nullptr))
                         {
+                            ++diagnosticBlockSubmissionFailures;
                             continue;
                         }
                         LogPrintf("success! hash = %s\n", pblock->GetHash().ToString().c_str());
                         break;
                     }
                 }
+            }
+
+            const int64_t now = GetTime();
+            if (now - lastDiagnosticLog >= 60) {
+                LogPrintf("StakeMinter status: height=%d time=%u bits=%08x candidates=%u cold=%u "
+                          "missing_index=%u immature_cold=%u read_failures=%u kernel_checks=%u "
+                          "kernel_matches=%u coinstake_failures=%u template_failures=%u "
+                          "submission_failures=%u cold_target_age=%d tip_age=%d\n",
+                          pIndexLast->nHeight, nTime, nBits,
+                          static_cast<unsigned int>(vCandidates.size()),
+                          static_cast<unsigned int>(coldCandidates),
+                          static_cast<unsigned int>(missingBlockIndex),
+                          static_cast<unsigned int>(immatureColdCandidates),
+                          static_cast<unsigned int>(blockReadFailures),
+                          static_cast<unsigned int>(diagnosticKernelChecks),
+                          static_cast<unsigned int>(diagnosticKernelMatches),
+                          static_cast<unsigned int>(diagnosticCoinstakeFailures),
+                          static_cast<unsigned int>(diagnosticBlockTemplateFailures),
+                          static_cast<unsigned int>(diagnosticBlockSubmissionFailures),
+                          coldStakeTargetAge, secondsSinceTip);
+                lastDiagnosticLog = now;
+                diagnosticKernelChecks = 0;
+                diagnosticKernelMatches = 0;
+                diagnosticCoinstakeFailures = 0;
+                diagnosticBlockTemplateFailures = 0;
+                diagnosticBlockSubmissionFailures = 0;
             }
             int64_t end = GetTimeMillis();
             MilliSleep(std::max(0ll, 1000ll - (end - start)));
