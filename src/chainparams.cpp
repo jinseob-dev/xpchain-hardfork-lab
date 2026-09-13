@@ -125,6 +125,7 @@ public:
 
         consensus.nStakeMinAge = 60 * 60 * 24 * 3;
         consensus.nStakeMaxAge = 60 * 60 * 24 * 60;
+        consensus.PoSRetargetFixHeight = 0;
 
         /**
          * The message start string is designed to be unlikely to occur in normal data.
@@ -247,6 +248,9 @@ public:
 
         consensus.nStakeMinAge = 60 * 60;
         consensus.nStakeMaxAge = 60 * 60 * 24 * 60;
+        // Heights 449 and 450 preserve the legacy overflowing retarget result.
+        // Reset at the frozen tip's successor, then use wide intermediates.
+        consensus.PoSRetargetFixHeight = 451;
 
         pchMessageStart[0] = 0xfa;
         pchMessageStart[1] = 0xbf;
@@ -344,6 +348,7 @@ public:
 
         consensus.nStakeMinAge = 10;
         consensus.nStakeMaxAge = 60 * 60 * 24 * 100;
+        consensus.PoSRetargetFixHeight = 0;
 
         pchMessageStart[0] = 0xfc;
         pchMessageStart[1] = 0x87;

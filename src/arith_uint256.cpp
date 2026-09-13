@@ -202,6 +202,7 @@ template void base_uint<256>::SetHex(const std::string&);
 template unsigned int base_uint<256>::bits() const;
 
 template base_uint<512>& base_uint<512>::operator*=(const base_uint<512>& b);
+template base_uint<512>& base_uint<512>::operator/=(const base_uint<512>& b);
 template int base_uint<512>::CompareTo(const base_uint<512>&) const;
 
 // This implementation directly uses shifts instead of going

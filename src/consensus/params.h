@@ -89,6 +89,8 @@ struct Params {
 
     int64_t nStakeMinAge;
     int64_t nStakeMaxAge;
+    /** Height that resets and enables overflow-safe PoS retargeting; 0 disables it. */
+    int PoSRetargetFixHeight{0};
 };
 } // namespace Consensus
 

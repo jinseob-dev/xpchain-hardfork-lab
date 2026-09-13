@@ -297,6 +297,14 @@ public:
             pn[i] = b.pn[i];
         }
     }
+
+    arith_uint256 GetLow256() const {
+        arith_uint256 result;
+        for (int i = 0; i < arith_uint256::WIDTH; ++i) {
+            result.pn[i] = pn[i];
+        }
+        return result;
+    }
 };
 
 #endif // XPCHAIN_ARITH_UINT256_H

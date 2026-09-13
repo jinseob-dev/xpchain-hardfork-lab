@@ -112,6 +112,66 @@ BOOST_AUTO_TEST_CASE(testnet_pow_to_pos_transition_uses_validation_difficulty)
         GetNextWorkRequired(&switchBlock, &firstPoS, consensus));
 }
 
+BOOST_AUTO_TEST_CASE(testnet_pos_retarget_overflow_fix_activation)
+{
+    const auto testParams = CreateChainParams(CBaseChainParams::TESTNET);
+    const Consensus::Params& consensus = testParams->GetConsensus();
+    const unsigned int powLimit = UintToArith256(consensus.powLimit).GetCompact();
+
+    // These values reproduce public testnet blocks 447-450. The target at 448
+    // is 236 bits; multiplying it by the legacy retarget numerator needs 257
+    // bits and wraps in arith_uint256. Preserve that historical result for 449.
+    CBlockIndex block447;
+    block447.nHeight = 447;
+    block447.nTime = 1789254384;
+    block447.nBits = 0x1e0dd5e2;
+
+    CBlockIndex block448;
+    block448.pprev = &block447;
+    block448.nHeight = 448;
+    block448.nTime = 1789255600;
+    block448.nBits = 0x1e0dd7f7;
+
+    CBlockHeader block449Candidate;
+    block449Candidate.nTime = 1789276188;
+    BOOST_CHECK_EQUAL(
+        GetNextWorkRequired(&block448, &block449Candidate, consensus),
+        0x1c2e516bU);
+
+    CBlockIndex block449;
+    block449.pprev = &block448;
+    block449.nHeight = 449;
+    block449.nTime = block449Candidate.nTime;
+    block449.nBits = 0x1c2e516b;
+
+    CBlockIndex block450;
+    block450.pprev = &block449;
+    block450.nHeight = 450;
+    block450.nTime = 1789276278;
+    block450.nBits = 0x1c2fe3dc;
+
+    // Recover the frozen public chain at 451 without invalidating its history.
+    CBlockHeader block451Candidate;
+    block451Candidate.nTime = block450.nTime + consensus.nPowTargetSpacing;
+    BOOST_CHECK_EQUAL(
+        GetNextWorkRequired(&block450, &block451Candidate, consensus),
+        powLimit);
+
+    // After the reset, a target at the 255-bit powLimit must survive the
+    // multiply-before-divide calculation without overflowing.
+    CBlockIndex block451;
+    block451.pprev = &block450;
+    block451.nHeight = 451;
+    block451.nTime = block451Candidate.nTime;
+    block451.nBits = powLimit;
+
+    CBlockHeader block452Candidate;
+    block452Candidate.nTime = block451.nTime + consensus.nPowTargetSpacing;
+    BOOST_CHECK_EQUAL(
+        GetNextWorkRequired(&block451, &block452Candidate, consensus),
+        powLimit);
+}
+
 /* Test the constraint on the lower bound for actual time taken */
 //BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
 //{

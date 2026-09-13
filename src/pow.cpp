@@ -15,6 +15,17 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     assert(pindexLast != nullptr);
     unsigned int nProofOfWorkLimit = UintToArith256(params.powLimit).GetCompact();
     bool fProofOfStake = pindexLast->nHeight > params.nSwitchHeight;
+    const int nextHeight = pindexLast->nHeight + 1;
+
+    // The isolated testnet originally combined a 255-bit powLimit with the
+    // legacy 256-bit PoS multiply-before-divide retarget. Once the target grew
+    // large enough, the intermediate product overflowed and made the chain
+    // thousands of times harder. Preserve historical blocks, reset once at the
+    // activation height, and use a wide intermediate after it.
+    if (fProofOfStake && params.PoSRetargetFixHeight > 0 &&
+        nextHeight == params.PoSRetargetFixHeight) {
+        return nProofOfWorkLimit;
+    }
     // Only change once per difficulty adjustment interval
     if (!fProofOfStake)
     {
@@ -72,8 +83,25 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
     if(fProofOfStake)
     {
         int64_t nInterval = params.DifficultyAdjustmentInterval();
-        bnNew*=((nInterval - 1) * params.nPowTargetSpacing + nActualTimespan + nActualTimespan);
-        bnNew/=((nInterval + 1) * params.nPowTargetSpacing);
+        const int64_t signedNumerator = (nInterval - 1) * params.nPowTargetSpacing +
+                                        nActualTimespan + nActualTimespan;
+        assert(signedNumerator > 0);
+        const uint64_t numerator = static_cast<uint64_t>(signedNumerator);
+        const uint64_t denominator = (nInterval + 1) * params.nPowTargetSpacing;
+        if (params.PoSRetargetFixHeight > 0 &&
+            pindexLast->nHeight + 1 > params.PoSRetargetFixHeight) {
+            arith_uint512 wideTarget(bnNew);
+            wideTarget *= arith_uint512(numerator);
+            wideTarget /= arith_uint512(denominator);
+            if (wideTarget > arith_uint512(bnPowLimit)) {
+                bnNew = bnPowLimit;
+            } else {
+                bnNew = wideTarget.GetLow256();
+            }
+        } else {
+            bnNew *= numerator;
+            bnNew /= denominator;
+        }
     }
     else
     {
