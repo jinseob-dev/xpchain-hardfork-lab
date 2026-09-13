@@ -168,6 +168,11 @@ public:
                 }
             }
 
+            // Recalculate lower bound after removing spent inputs
+            lower = qLowerBound(
+                cachedWallet.begin(), cachedWallet.end(), hash, TxLessThan());
+            lowerIndex = (lower - cachedWallet.begin());
+
             // append
             int offsetLower = 0;
             for(const KernelRecord& kr : KernelRecord::decomposeOutput(wtx))
@@ -177,8 +182,12 @@ public:
                     continue;
                 }
 
-                parent->beginInsertRows(QModelIndex(), lowerIndex + offsetLower, lowerIndex + offsetLower);
-                cachedWallet.insert(lowerIndex + offsetLower, kr);
+                int insertPos = lowerIndex + offsetLower;
+                if (insertPos < 0) insertPos = 0;
+                if (insertPos > cachedWallet.size()) insertPos = cachedWallet.size();
+
+                parent->beginInsertRows(QModelIndex(), insertPos, insertPos);
+                cachedWallet.insert(insertPos, kr);
                 parent->endInsertRows();
                 offsetLower++;
             }
@@ -306,13 +315,20 @@ void MintingTableModel::updateTransaction(const QString &hash, int status, bool 
 
 void MintingTableModel::updateAge()
 {
-    if (priv->size() > 0) {
-        Q_EMIT dataChanged(index(0, Age), index(priv->size()-1, Age));
-        Q_EMIT dataChanged(index(0, CoinDay), index(priv->size()-1, CoinDay));
-        Q_EMIT dataChanged(index(0, MintProbability), index(priv->size()-1, MintProbability));
-        Q_EMIT dataChanged(index(0, MintReward), index(priv->size()-1, MintReward));
-    }
+    // Process pending events first to avoid operating on outdated row indices
     priv->refreshWallet();
+
+    int nRows = priv->size();
+    if (nRows > 0) {
+        QModelIndex topLeftAge = index(0, Age);
+        QModelIndex bottomRightAge = index(nRows - 1, Age);
+        if (topLeftAge.isValid() && bottomRightAge.isValid()) {
+            Q_EMIT dataChanged(topLeftAge, bottomRightAge);
+            Q_EMIT dataChanged(index(0, CoinDay), index(nRows - 1, CoinDay));
+            Q_EMIT dataChanged(index(0, MintProbability), index(nRows - 1, MintProbability));
+            Q_EMIT dataChanged(index(0, MintReward), index(nRows - 1, MintReward));
+        }
+    }
 }
 
 void MintingTableModel::setMintingProxyModel(MintingFilterProxy *mintingProxy)
@@ -452,6 +468,9 @@ QString MintingTableModel::lookupAddress(const std::string &address, bool toolti
 
 QString MintingTableModel::formatTxPoSReward(KernelRecord *wtx) const
 {
+    if (!wtx || !chainActive.Tip()) {
+        return QString();
+    }
     QString posReward;
     posReward += QString(QObject::tr("from  %1 to %2")).arg(XPChainUnits::formatWithUnit(walletModel->getOptionsModel()->getDisplayUnit(), wtx->getPoSReward(0)),
         XPChainUnits::formatWithUnit(walletModel->getOptionsModel()->getDisplayUnit(), wtx->getPoSReward(mintingInterval)));
@@ -459,6 +478,9 @@ QString MintingTableModel::formatTxPoSReward(KernelRecord *wtx) const
 }
 double MintingTableModel::getDayToMint(KernelRecord *wtx) const
 {
+    if (!wtx || !chainActive.Tip()) {
+        return 0.0;
+    }
     double difficulty = GetDifficulty(chainActive.Tip());
 
     double prob = wtx->getProbToMintWithinNMinutes(difficulty, mintingInterval);
