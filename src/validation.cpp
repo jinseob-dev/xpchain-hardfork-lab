@@ -1239,7 +1239,11 @@ static void CheckForkWarningConditions()
     if (pindexBestForkTip && chainActive.Height() - pindexBestForkTip->nHeight >= 72)
         pindexBestForkTip = nullptr;
 
-    if (pindexBestForkTip || (pindexBestInvalid && pindexBestInvalid->nChainWork > chainActive.Tip()->nChainWork + (GetBlockProof(*chainActive.Tip()) * 6)))
+    const bool large_work_invalid = pindexBestInvalid &&
+        pindexBestInvalid->nChainWork > chainActive.Tip()->nChainWork + (GetBlockProof(*chainActive.Tip()) * 6) &&
+        !IsKnownStaleRetargetFork(pindexBestInvalid, chainActive.Height(), Params().GetConsensus());
+
+    if (pindexBestForkTip || large_work_invalid)
     {
         if (!GetfLargeWorkForkFound() && pindexBestForkBase)
         {

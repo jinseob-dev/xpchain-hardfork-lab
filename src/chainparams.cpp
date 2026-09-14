@@ -251,6 +251,7 @@ public:
         // Heights 449 and 450 preserve the legacy overflowing retarget result.
         // Reset at the frozen tip's successor, then use wide intermediates.
         consensus.PoSRetargetFixHeight = 451;
+        consensus.PoSRetargetLegacyForkBlock = uint256S("0xae20ad929456b8336fd22840ca970aec6738ce3ea74c24ecac93d171f613bf52");
 
         pchMessageStart[0] = 0xfa;
         pchMessageStart[1] = 0xbf;

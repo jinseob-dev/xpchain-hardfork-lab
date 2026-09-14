@@ -88,6 +88,7 @@ XPCHAIN_TESTS =\
   test/txindex_tests.cpp \
   test/txvalidation_tests.cpp \
   test/txvalidationcache_tests.cpp \
+  test/warnings_tests.cpp \
   test/uint256_tests.cpp \
   test/util_tests.cpp \
   test/validation_block_tests.cpp \

@@ -9,10 +9,15 @@
 #include <stdlib.h>
 #include <string>
 
+class CBlockIndex;
+namespace Consensus { struct Params; }
+
 void SetMiscWarning(const std::string& strWarning);
 void SetfLargeWorkForkFound(bool flag);
 bool GetfLargeWorkForkFound();
 void SetfLargeWorkInvalidChainFound(bool flag);
+/** Whether an invalid tip belongs to the known, sufficiently stale PoS retarget recovery fork. */
+bool IsKnownStaleRetargetFork(const CBlockIndex* invalid_tip, int active_height, const Consensus::Params& params);
 /** Format a string that describes several potential problems detected by the core.
  * @param[in] strFor can have the following values:
  * - "statusbar": get the most important warning

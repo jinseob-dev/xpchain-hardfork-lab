@@ -3,8 +3,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <sync.h>
+#include <chain.h>
 #include <clientversion.h>
+#include <consensus/params.h>
+#include <sync.h>
 #include <util.h>
 #include <warnings.h>
 
@@ -12,6 +14,20 @@ CCriticalSection cs_warnings;
 std::string strMiscWarning GUARDED_BY(cs_warnings);
 bool fLargeWorkForkFound GUARDED_BY(cs_warnings) = false;
 bool fLargeWorkInvalidChainFound GUARDED_BY(cs_warnings) = false;
+
+bool IsKnownStaleRetargetFork(const CBlockIndex* invalid_tip, int active_height, const Consensus::Params& params)
+{
+    static constexpr int STALE_FORK_DEPTH = 72;
+    if (!invalid_tip || params.PoSRetargetFixHeight <= 0 ||
+        params.PoSRetargetLegacyForkBlock.IsNull() ||
+        invalid_tip->nHeight < params.PoSRetargetFixHeight ||
+        active_height - invalid_tip->nHeight < STALE_FORK_DEPTH) {
+        return false;
+    }
+
+    const CBlockIndex* recovery_block = invalid_tip->GetAncestor(params.PoSRetargetFixHeight);
+    return recovery_block && recovery_block->GetBlockHash() == params.PoSRetargetLegacyForkBlock;
+}
 
 void SetMiscWarning(const std::string& strWarning)
 {
