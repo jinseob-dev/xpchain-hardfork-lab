@@ -3455,7 +3455,9 @@ static UniValue createwallet(const JSONRPCRequest& request)
     std::string warning;
 
     uint64_t flags = 0;
-    LogPrintf("RPC createwallet: params count=%d, params=%s\n", request.params.size(), request.params.write());
+    // Never log raw createwallet parameters: parameter 4 may contain the
+    // wallet and SQLCipher database passphrase.
+    LogPrintf("RPC createwallet: wallet=%s, params count=%d\n", wallet_name, request.params.size());
 
     if (request.params.size() > 1 && ((request.params[1].isBool() && request.params[1].get_bool()) || 
         (request.params[1].isStr() && request.params[1].get_str() == "true") ||

@@ -22,6 +22,8 @@
 #include <qt/walletframe.h>
 #include <qt/walletmodel.h>
 #include <qt/walletview.h>
+#include <wallet/db.h>
+#include <wallet/sqlite.h>
 #include <wallet/walletutil.h>
 #include <qt/mnemonicimportdialog.h>
 #include <qt/mnemonicbackupdialog.h>
@@ -2260,6 +2262,18 @@ void XPChainGUI::openWallet()
 
     UniValue params(UniValue::VARR);
     params.push_back(wallet_name.toStdString());
+
+    const fs::path wallet_path = fs::absolute(wallet_name.toStdString(), GetWalletDir());
+    if (IsSqlcipherEncryptedFile(WalletDatabaseFilePath(wallet_path))) {
+        QString passphrase;
+        bool ok = false;
+        askWalletDbPassphrase(wallet_name, QString(), &passphrase, &ok);
+        if (!ok || passphrase.isEmpty()) return;
+        params.push_back(passphrase.toStdString());
+        passphrase.fill(QChar(' '));
+        passphrase.clear();
+    }
+
     try {
         m_node.executeRpc("loadwallet", params, "");
     } catch (const UniValue& e) {

@@ -25,6 +25,8 @@ class WalletSQLiteEncryptionTest(BitcoinTestFramework):
         self.log.info("createwallet with passphrase encrypts on create (no shutdown)")
         create_pass = "create-on-encrypt-pass"
         node.createwallet("enc_on_create", False, False, create_pass)
+        with open(os.path.join(node.datadir, "regtest", "debug.log"), encoding="utf8") as debug_log:
+            assert create_pass not in debug_log.read(), "createwallet passphrase must never be written to debug.log"
         created = node.get_wallet_rpc("enc_on_create")
         created_info = created.getwalletinfo()
         assert_equal(created_info["databaseformat"], "sqlite")
