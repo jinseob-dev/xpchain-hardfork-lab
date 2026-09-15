@@ -25,7 +25,10 @@ bool IsKnownStaleRetargetFork(const CBlockIndex* invalid_tip, int active_height,
         return false;
     }
 
-    const CBlockIndex* recovery_block = invalid_tip->GetAncestor(params.PoSRetargetFixHeight);
+    const CBlockIndex* recovery_block = invalid_tip;
+    while (recovery_block && recovery_block->nHeight > params.PoSRetargetFixHeight) {
+        recovery_block = recovery_block->pprev;
+    }
     return recovery_block && recovery_block->GetBlockHash() == params.PoSRetargetLegacyForkBlock;
 }
 
