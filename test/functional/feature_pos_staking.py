@@ -113,6 +113,34 @@ class PoSStakingTest(BitcoinTestFramework):
         # The empty selector chooses the owner branch, not the delegated staking branch.
         assert_equal(withdrawn['vin'][0]['txinwitness'][-2], '')
         assert_equal(withdrawn['vin'][0]['txinwitness'][-1], contract['redeemScript'])
+
+        # A request for the exact contract balance is a sweep: the fee is taken
+        # from the destination amount, so no unusable fee-sized remainder is left.
+        sweep_owner = self.nodes[0].getnewaddress('cold sweep owner', 'bech32')
+        sweep_contract = self.nodes[0].createcoldstakingaddress(
+            sweep_owner, contract['staker'])
+        self.nodes[0].delegatecoldstaking(sweep_contract['address'], 25)
+        sweep_view = self.nodes[0].listcoldstaking()
+        sweep_balance = sum(
+            output['amount'] for output in sweep_view['outputs']
+            if output['address'] == sweep_contract['address'])
+        assert_equal(sweep_balance, Decimal('25'))
+
+        sweep_destination = self.nodes[0].getnewaddress('cold sweep destination', 'bech32')
+        sweep = self.nodes[0].withdrawcoldstaking(
+            sweep_contract['address'], sweep_destination, sweep_balance)
+        assert_equal(sweep['fee_deducted_from_amount'], True)
+        assert_equal(sweep['received_amount'], sweep_balance - sweep['fee'])
+        swept = self.nodes[0].getrawtransaction(sweep['txid'], True)
+        swept_destination_outputs = [
+            output for output in swept['vout']
+            if output['scriptPubKey'].get('addresses') == [sweep_destination]]
+        swept_contract_outputs = [
+            output for output in swept['vout']
+            if output['scriptPubKey'].get('addresses') == [sweep_contract['address']]]
+        assert_equal(sum(output['value'] for output in swept_destination_outputs),
+                     sweep['received_amount'])
+        assert_equal(swept_contract_outputs, [])
         return withdrawal['txid']
 
     def check_cold_stake_role_separation(self, contract, withdrawal_txid):
@@ -320,6 +348,12 @@ class PoSStakingTest(BitcoinTestFramework):
         address = self.nodes[0].getnewaddress("", "bech32m")
         owner_address = self.nodes[0].getnewaddress("owner", "bech32")
         staker_address = self.nodes[1].getnewaddress("staker", "bech32")
+        assert_raises_rpc_error(
+            -5, "Taproot owner addresses (txpc1p...) are not supported",
+            self.nodes[1].createcoldstakingaddress, address, staker_address)
+        assert_raises_rpc_error(
+            -5, "Taproot staker addresses (txpc1p...) are not supported",
+            self.nodes[1].createcoldstakingaddress, owner_address, address)
         contract = self.nodes[1].createcoldstakingaddress(owner_address, staker_address)
         assert_equal(self.nodes[1].getaddressinfo(contract['address'])['ismine'], True)
         assert_equal(self.nodes[0].getaddressinfo(contract['address'])['ismine'], False)

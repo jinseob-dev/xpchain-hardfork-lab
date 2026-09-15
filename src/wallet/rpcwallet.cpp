@@ -5311,10 +5311,18 @@ static UniValue createcoldstakingaddress(const JSONRPCRequest& request)
 
     CKeyID ownerKey, stakerKey;
     if (!IsValidDestination(ownerDest) || !keyIdForDestination(ownerDest, ownerKey)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Owner address must be P2PKH or P2WPKH");
+        if (boost::get<WitnessV1Taproot>(&ownerDest)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                               "Taproot owner addresses (txpc1p...) are not supported by this cold-staking contract version; use a P2WPKH Bech32 address (txpc1q...)");
+        }
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Owner address must be P2PKH or P2WPKH Bech32 (txpc1q...)");
     }
     if (!IsValidDestination(stakerDest) || !keyIdForDestination(stakerDest, stakerKey)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Staker address must be P2PKH or P2WPKH");
+        if (boost::get<WitnessV1Taproot>(&stakerDest)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
+                               "Taproot staker addresses (txpc1p...) are not supported by this cold-staking contract version; use a P2WPKH Bech32 address (txpc1q...)");
+        }
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Staker address must be P2PKH or P2WPKH Bech32 (txpc1q...)");
     }
 
     LOCK2(cs_main, pwallet->cs_wallet);
@@ -5570,7 +5578,8 @@ static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
     if (request.fHelp || request.params.size() != 3) {
         throw std::runtime_error(
             "withdrawcoldstaking \"contract_address\" \"destination_address\" amount\n"
-            "Withdraw delegated funds using the contract owner key. The fee is paid from contract change.\n"
+            "Withdraw delegated funds using the contract owner key. If amount equals the full "
+            "spendable contract balance, the fee is deducted from the destination amount.\n"
             + HelpRequiringPassphrase(pwallet.get()));
     }
 
@@ -5613,6 +5622,7 @@ static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
     if (contractBalance < amount) {
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Cold-staking contract has insufficient funds");
     }
+    const bool withdrawAll = contractBalance == amount;
 
     CReserveKey changeKey(pwallet.get());
     CTransactionRef transaction;
@@ -5627,7 +5637,7 @@ static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
         coinControl.Select(outpoint);
         selected += pwallet->mapWallet.at(outpoint.hash).tx->vout[outpoint.n].nValue;
         if (selected < amount) continue;
-        std::vector<CRecipient> recipients{{GetScriptForDestination(destination), amount, false}};
+        std::vector<CRecipient> recipients{{GetScriptForDestination(destination), amount, withdrawAll}};
         created = pwallet->CreateTransaction(recipients, transaction, changeKey, fee,
                                              changePosition, error, coinControl);
         if (created) break;
@@ -5647,7 +5657,9 @@ static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", transaction->GetHash().GetHex());
     result.pushKV("amount", ValueFromAmount(amount));
+    if (withdrawAll) result.pushKV("received_amount", ValueFromAmount(amount - fee));
     result.pushKV("fee", ValueFromAmount(fee));
+    result.pushKV("fee_deducted_from_amount", withdrawAll);
     result.pushKV("contract_address", EncodeDestination(contract));
     result.pushKV("destination_address", EncodeDestination(destination));
     return result;

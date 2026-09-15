@@ -57,6 +57,7 @@ private:
     QLineEdit *editWithdrawDestination;
     QLineEdit *editWithdrawAmount;
     QPushButton *btnRefreshContracts;
+    QPushButton *btnWithdrawAll;
     QPushButton *btnWithdraw;
     QLabel *labelContractSummary;
     QLabel *labelWithdrawStatus;

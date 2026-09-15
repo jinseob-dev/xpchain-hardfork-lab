@@ -54,6 +54,7 @@ ColdStakingDialog::ColdStakingDialog(const PlatformStyle *_platformStyle, Wallet
       editWithdrawDestination(nullptr),
       editWithdrawAmount(nullptr),
       btnRefreshContracts(nullptr),
+      btnWithdrawAll(nullptr),
       btnWithdraw(nullptr),
       labelContractSummary(nullptr),
       labelWithdrawStatus(nullptr)
@@ -203,8 +204,15 @@ void ColdStakingDialog::setupUI()
     formWithdraw->addRow(tr("&Destination Address:"), editWithdrawDestination);
 
     editWithdrawAmount = new QLineEdit(tabManage);
-    editWithdrawAmount->setPlaceholderText(tr("Amount to withdraw (transaction fee is additional)"));
-    formWithdraw->addRow(tr("&Amount (XPC):"), editWithdrawAmount);
+    editWithdrawAmount->setPlaceholderText(
+        tr("Amount to withdraw (use Max to deduct the fee from this amount)"));
+    btnWithdrawAll = new QPushButton(tr("Max"), tabManage);
+    QWidget *amountRow = new QWidget(tabManage);
+    QHBoxLayout *amountLayout = new QHBoxLayout(amountRow);
+    amountLayout->setContentsMargins(0, 0, 0, 0);
+    amountLayout->addWidget(editWithdrawAmount, 1);
+    amountLayout->addWidget(btnWithdrawAll);
+    formWithdraw->addRow(tr("&Amount (XPC):"), amountRow);
     manageLayout->addLayout(formWithdraw);
 
     btnWithdraw = new QPushButton(tr("Withdraw Delegated Coins"), tabManage);
@@ -243,6 +251,16 @@ void ColdStakingDialog::setupUI()
     });
     connect(btnSendDelegation, &QPushButton::clicked, this, &ColdStakingDialog::onDelegateClicked);
     connect(btnRefreshContracts, &QPushButton::clicked, this, &ColdStakingDialog::refreshColdStaking);
+    connect(btnWithdrawAll, &QPushButton::clicked, [this]() {
+        const int index = comboWithdrawContract->currentIndex();
+        if (index < 0) return;
+        const CAmount balance = comboWithdrawContract->itemData(index, Qt::UserRole + 1).toLongLong();
+        editWithdrawAmount->setText(XPChainUnits::format(XPChainUnits::XPC, balance, false,
+                                                         XPChainUnits::separatorNever));
+        labelWithdrawStatus->setStyleSheet("color: #8b949e;");
+        labelWithdrawStatus->setText(
+            tr("Full withdrawal selected. The network fee will be deducted from the amount received."));
+    });
     connect(btnWithdraw, &QPushButton::clicked, this, &ColdStakingDialog::onWithdrawClicked);
     connect(tabWidget, &QTabWidget::currentChanged, [this](int index) {
         if (index == 2) refreshColdStaking();
@@ -283,6 +301,29 @@ void ColdStakingDialog::onGenerateAddressClicked()
         return;
     }
 
+    if (boost::get<WitnessV1Taproot>(&ownerDest)) {
+        const QString warning = tr(
+            "Taproot owner addresses (txpc1p...) are not supported by this cold-staking contract version. "
+            "Create a SegWit v0 Bech32 address (txpc1q...) in the owner wallet and use that address instead.");
+        labelStatus->setStyleSheet("color: #f85149;");
+        labelStatus->setText(warning);
+        QMessageBox::warning(this, tr("Unsupported Taproot Owner Address"), warning);
+        editOwnerAddress->setFocus();
+        editOwnerAddress->selectAll();
+        return;
+    }
+    if (boost::get<WitnessV1Taproot>(&stakerDest)) {
+        const QString warning = tr(
+            "Taproot staker addresses (txpc1p...) are not supported by this cold-staking contract version. "
+            "Create a SegWit v0 Bech32 address (txpc1q...) in the staking wallet and use that address instead.");
+        labelStatus->setStyleSheet("color: #f85149;");
+        labelStatus->setText(warning);
+        QMessageBox::warning(this, tr("Unsupported Taproot Staker Address"), warning);
+        editStakerAddress->setFocus();
+        editStakerAddress->selectAll();
+        return;
+    }
+
     CKeyID ownerKeyId;
     if (const CKeyID *k = boost::get<CKeyID>(&ownerDest)) {
         ownerKeyId = *k;
@@ -290,7 +331,7 @@ void ColdStakingDialog::onGenerateAddressClicked()
         ownerKeyId = CKeyID(*w);
     } else {
         labelStatus->setStyleSheet("color: #f85149;");
-        labelStatus->setText(tr("Owner address must be a standard P2PKH or SegWit (Bech32) address."));
+        labelStatus->setText(tr("Owner address must be P2PKH or SegWit v0 P2WPKH (txpc1q...)."));
         return;
     }
 
@@ -301,7 +342,7 @@ void ColdStakingDialog::onGenerateAddressClicked()
         stakerKeyId = CKeyID(*w);
     } else {
         labelStatus->setStyleSheet("color: #f85149;");
-        labelStatus->setText(tr("Staker node address must be a standard P2PKH or SegWit (Bech32) address."));
+        labelStatus->setText(tr("Staker node address must be P2PKH or SegWit v0 P2WPKH (txpc1q...)."));
         return;
     }
 
@@ -481,6 +522,9 @@ void ColdStakingDialog::refreshColdStaking()
             comboWithdrawContract->addItem(
                 tr("%1 — %2 XPC").arg(address, XPChainUnits::format(XPChainUnits::XPC, summary.balance)),
                 address);
+            comboWithdrawContract->setItemData(comboWithdrawContract->count() - 1,
+                                               QVariant::fromValue<qlonglong>(summary.balance),
+                                               Qt::UserRole + 1);
         }
         if (summary.staker) stakerTotal += summary.balance;
     }
@@ -542,13 +586,20 @@ void ColdStakingDialog::onWithdrawClicked()
         return;
     }
 
+    const CAmount receiveAmount = transaction.getRecipients().first().amount;
+    const bool feeDeducted = receiveAmount < amount;
     const QString formattedAmount = XPChainUnits::formatWithUnit(XPChainUnits::XPC, amount);
+    const QString formattedReceiveAmount = XPChainUnits::formatWithUnit(XPChainUnits::XPC, receiveAmount);
     const QString fee = XPChainUnits::formatWithUnit(XPChainUnits::XPC, transaction.getTransactionFee());
     const QMessageBox::StandardButton confirmation = QMessageBox::question(
         this, tr("Confirm Cold Staking Withdrawal"),
-        tr("Withdraw %1 from the selected contract?\n\nDestination: %2\nInputs: %3\nTransaction fee: %4\n\n"
-           "Only the owner key can authorize this transaction.")
-            .arg(formattedAmount, destination).arg(inputCount).arg(fee),
+        (feeDeducted
+            ? tr("Withdraw the full contract balance of %1?\n\nDestination: %2\nAmount received: %3\nInputs: %4\n"
+                 "Transaction fee deducted from received amount: %5\n\nOnly the owner key can authorize this transaction.")
+                  .arg(formattedAmount, destination, formattedReceiveAmount).arg(inputCount).arg(fee)
+            : tr("Withdraw %1 from the selected contract?\n\nDestination: %2\nInputs: %3\nTransaction fee: %4\n\n"
+                 "Only the owner key can authorize this transaction.")
+                  .arg(formattedAmount, destination).arg(inputCount).arg(fee)),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (confirmation != QMessageBox::Yes) return;
 

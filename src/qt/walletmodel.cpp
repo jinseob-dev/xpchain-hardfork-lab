@@ -332,6 +332,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareColdStakingWithdrawal(
         spendable.push_back(output);
     }
     if (recipient.amount > contractBalance) return AmountExceedsBalance;
+    const bool withdrawAll = recipient.amount == contractBalance;
 
     std::sort(spendable.begin(), spendable.end(), [](const auto& a, const auto& b) {
         return a.amount > b.amount;
@@ -348,7 +349,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareColdStakingWithdrawal(
         if (selected < recipient.amount) continue;
 
         std::vector<CRecipient> txRecipients{{GetScriptForDestination(
-            DecodeDestination(recipient.address.toStdString())), recipient.amount, false}};
+            DecodeDestination(recipient.address.toStdString())), recipient.amount, withdrawAll}};
         CAmount fee = 0;
         int changePosition = -1;
         std::string failureReason;
@@ -358,6 +359,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareColdStakingWithdrawal(
         transaction.setTransactionFee(fee);
         if (pending) {
             if (fee > m_node.getMaxTxFee()) return AbsurdFee;
+            if (withdrawAll) transaction.reassignAmounts(changePosition);
             return OK;
         }
     }
