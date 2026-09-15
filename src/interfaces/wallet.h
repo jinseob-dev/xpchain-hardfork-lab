@@ -6,6 +6,7 @@
 #define XPCHAIN_INTERFACES_WALLET_H
 
 #include <amount.h>                    // For CAmount
+#include <primitives/transaction.h>    // For COutPoint
 #include <pubkey.h>                    // For CKeyID and CScriptID (definitions needed in CTxDestination instantiation)
 #include <script/ismine.h>             // For isminefilter, isminetype
 #include <script/standard.h>           // For CTxDestination
@@ -38,6 +39,17 @@ struct WalletBalances;
 struct WalletTx;
 struct WalletTxOut;
 struct WalletTxStatus;
+
+//! An unspent cold-staking output known to the wallet.
+struct ColdStakingOutput
+{
+    COutPoint outpoint;
+    CTxDestination address;
+    CAmount amount = 0;
+    int confirmations = 0;
+    bool owner = false;
+    bool staker = false;
+};
 
 //! Options controlling BIP39 mnemonic import behaviour.
 struct MnemonicImportOptions
@@ -87,6 +99,7 @@ public:
     //! Store a redeem/witness script so P2SH/P2WSH outputs can be recognized and signed.
     virtual bool addScript(const CScript& script) = 0;
     virtual bool isColdStakingDestination(const CTxDestination& dest) = 0;
+    virtual std::vector<ColdStakingOutput> getColdStakingOutputs() = 0;
 
     //! Rescan blockchain from startTime.
     virtual int64_t rescanFromTime(int64_t start_time) = 0;

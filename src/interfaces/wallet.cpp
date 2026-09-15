@@ -159,6 +159,42 @@ public:
         return m_wallet.GetCScript(CScriptID(scriptId), witnessScript) &&
                MatchColdStakingScript(witnessScript, stakingKey, ownerKey);
     }
+    std::vector<ColdStakingOutput> getColdStakingOutputs() override
+    {
+        LOCK2(cs_main, m_wallet.cs_wallet);
+        std::vector<COutput> coins;
+        m_wallet.AvailableCoins(coins, false);
+
+        std::vector<ColdStakingOutput> result;
+        for (const COutput& coin : coins) {
+            if (!coin.tx || !coin.tx->tx) continue;
+            const CTxOut& txout = coin.tx->tx->vout[coin.i];
+            CTxDestination destination;
+            if (!ExtractDestination(txout.scriptPubKey, destination)) continue;
+
+            txnouttype type;
+            std::vector<std::vector<unsigned char>> solutions;
+            if (!Solver(txout.scriptPubKey, type, solutions) ||
+                type != TX_WITNESS_V0_SCRIPTHASH || solutions.size() != 1) continue;
+
+            uint160 script_id;
+            CRIPEMD160().Write(solutions[0].data(), solutions[0].size()).Finalize(script_id.begin());
+            CScript witness_script;
+            CKeyID staking_key, owner_key;
+            if (!m_wallet.GetCScript(CScriptID(script_id), witness_script) ||
+                !MatchColdStakingScript(witness_script, staking_key, owner_key)) continue;
+
+            ColdStakingOutput output;
+            output.outpoint = COutPoint(coin.tx->GetHash(), coin.i);
+            output.address = destination;
+            output.amount = txout.nValue;
+            output.confirmations = coin.nDepth;
+            output.owner = m_wallet.HaveKey(owner_key);
+            output.staker = m_wallet.HaveKey(staking_key);
+            result.push_back(std::move(output));
+        }
+        return result;
+    }
     bool importMnemonicSeed(const std::vector<unsigned char>& seed_bytes, const MnemonicImportOptions& options) override
     {
         LOCK2(cs_main, m_wallet.cs_wallet);

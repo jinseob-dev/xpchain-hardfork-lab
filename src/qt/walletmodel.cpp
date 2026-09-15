@@ -24,6 +24,7 @@
 #include <wallet/coincontrol.h>
 #include <wallet/wallet.h>
 
+#include <algorithm>
 #include <stdint.h>
 
 #include <QDebug>
@@ -302,6 +303,66 @@ WalletModel::SendCoinsReturn WalletModel::prepareColdStakingTransaction(
     }
     if (fee > m_node.getMaxTxFee()) return AbsurdFee;
     return OK;
+}
+
+std::vector<interfaces::ColdStakingOutput> WalletModel::getColdStakingOutputs() const
+{
+    return m_wallet->getColdStakingOutputs();
+}
+
+WalletModel::SendCoinsReturn WalletModel::prepareColdStakingWithdrawal(
+    WalletModelTransaction& transaction, const QString& contractAddress, int& inputCount)
+{
+    inputCount = 0;
+    const QList<SendCoinsRecipient> recipients = transaction.getRecipients();
+    if (recipients.size() != 1) return InvalidAmount;
+    const SendCoinsRecipient& recipient = recipients.first();
+    if (!validateAddress(recipient.address)) return InvalidAddress;
+    if (recipient.amount <= 0) return InvalidAmount;
+
+    const CTxDestination contract = DecodeDestination(contractAddress.toStdString());
+    if (!IsValidDestination(contract) || !m_wallet->isColdStakingDestination(contract)) return InvalidAddress;
+
+    std::vector<interfaces::ColdStakingOutput> outputs = m_wallet->getColdStakingOutputs();
+    CAmount contractBalance = 0;
+    std::vector<interfaces::ColdStakingOutput> spendable;
+    for (const auto& output : outputs) {
+        if (output.address != contract || !output.owner) continue;
+        contractBalance += output.amount;
+        spendable.push_back(output);
+    }
+    if (recipient.amount > contractBalance) return AmountExceedsBalance;
+
+    std::sort(spendable.begin(), spendable.end(), [](const auto& a, const auto& b) {
+        return a.amount > b.amount;
+    });
+
+    CAmount selected = 0;
+    CCoinControl coinControl;
+    coinControl.destChange = contract;
+    coinControl.fAllowOtherInputs = false;
+    for (const auto& output : spendable) {
+        coinControl.Select(output.outpoint);
+        selected += output.amount;
+        ++inputCount;
+        if (selected < recipient.amount) continue;
+
+        std::vector<CRecipient> txRecipients{{GetScriptForDestination(
+            DecodeDestination(recipient.address.toStdString())), recipient.amount, false}};
+        CAmount fee = 0;
+        int changePosition = -1;
+        std::string failureReason;
+        auto& pending = transaction.getWtx();
+        pending = m_wallet->createTransaction(txRecipients, coinControl, true,
+                                               changePosition, fee, failureReason);
+        transaction.setTransactionFee(fee);
+        if (pending) {
+            if (fee > m_node.getMaxTxFee()) return AbsurdFee;
+            return OK;
+        }
+    }
+
+    return AmountWithFeeExceedsBalance;
 }
 
 WalletModel::SendCoinsReturn WalletModel::sendCoins(WalletModelTransaction &transaction)

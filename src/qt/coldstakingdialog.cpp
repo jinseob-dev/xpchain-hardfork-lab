@@ -18,15 +18,21 @@
 #include <pos/stake.h>
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QClipboard>
+#include <QComboBox>
 #include <QFormLayout>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QVBoxLayout>
+
+#include <map>
 
 ColdStakingDialog::ColdStakingDialog(const PlatformStyle *_platformStyle, WalletModel *_model, QWidget *parent)
     : QDialog(parent),
@@ -42,7 +48,15 @@ ColdStakingDialog::ColdStakingDialog(const PlatformStyle *_platformStyle, Wallet
       editDelegateAddress(nullptr),
       editDelegateAmount(nullptr),
       btnSendDelegation(nullptr),
-      labelDelegateStatus(nullptr)
+      labelDelegateStatus(nullptr),
+      tableContracts(nullptr),
+      comboWithdrawContract(nullptr),
+      editWithdrawDestination(nullptr),
+      editWithdrawAmount(nullptr),
+      btnRefreshContracts(nullptr),
+      btnWithdraw(nullptr),
+      labelContractSummary(nullptr),
+      labelWithdrawStatus(nullptr)
 {
     setupUI();
 }
@@ -54,7 +68,8 @@ ColdStakingDialog::~ColdStakingDialog()
 void ColdStakingDialog::setupUI()
 {
     setWindowTitle(tr("Cold Staking & Delegation"));
-    setMinimumWidth(680);
+    setMinimumWidth(760);
+    resize(900, 650);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
@@ -146,6 +161,62 @@ void ColdStakingDialog::setupUI()
 
     tabWidget->addTab(tabDelegate, tr("2. Delegate Coins"));
 
+    // ==========================================
+    // Tab 3: Monitor / Withdraw
+    // ==========================================
+    QWidget *tabManage = new QWidget();
+    QVBoxLayout *manageLayout = new QVBoxLayout(tabManage);
+
+    QLabel *descManage = new QLabel(
+        tr("Review the cold-staking contracts known to this wallet. "
+           "Only a wallet marked <b>Owner</b> can withdraw principal; a staking-only wallet cannot spend it."),
+        tabManage);
+    descManage->setWordWrap(true);
+    manageLayout->addWidget(descManage);
+
+    tableContracts = new QTableWidget(0, 5, tabManage);
+    tableContracts->setHorizontalHeaderLabels({tr("Contract Address"), tr("Role"),
+                                                tr("Balance"), tr("UTXOs"), tr("Min Conf.")});
+    tableContracts->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tableContracts->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tableContracts->setSelectionMode(QAbstractItemView::SingleSelection);
+    tableContracts->verticalHeader()->setVisible(false);
+    tableContracts->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column < 5; ++column) {
+        tableContracts->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    }
+    manageLayout->addWidget(tableContracts);
+
+    QHBoxLayout *summaryLayout = new QHBoxLayout();
+    labelContractSummary = new QLabel(tabManage);
+    btnRefreshContracts = new QPushButton(tr("Refresh"), tabManage);
+    summaryLayout->addWidget(labelContractSummary, 1);
+    summaryLayout->addWidget(btnRefreshContracts);
+    manageLayout->addLayout(summaryLayout);
+
+    QFormLayout *formWithdraw = new QFormLayout();
+    comboWithdrawContract = new QComboBox(tabManage);
+    formWithdraw->addRow(tr("&Owner Contract:"), comboWithdrawContract);
+
+    editWithdrawDestination = new QLineEdit(tabManage);
+    editWithdrawDestination->setPlaceholderText(tr("Normal address controlled by the owner"));
+    formWithdraw->addRow(tr("&Destination Address:"), editWithdrawDestination);
+
+    editWithdrawAmount = new QLineEdit(tabManage);
+    editWithdrawAmount->setPlaceholderText(tr("Amount to withdraw (transaction fee is additional)"));
+    formWithdraw->addRow(tr("&Amount (XPC):"), editWithdrawAmount);
+    manageLayout->addLayout(formWithdraw);
+
+    btnWithdraw = new QPushButton(tr("Withdraw Delegated Coins"), tabManage);
+    btnWithdraw->setEnabled(false);
+    manageLayout->addWidget(btnWithdraw);
+
+    labelWithdrawStatus = new QLabel(tabManage);
+    labelWithdrawStatus->setWordWrap(true);
+    manageLayout->addWidget(labelWithdrawStatus);
+
+    tabWidget->addTab(tabManage, tr("3. Manage / Withdraw"));
+
     mainLayout->addWidget(tabWidget);
 
     // Default: if model available, populate owner address with a receiving address
@@ -155,7 +226,9 @@ void ColdStakingDialog::setupUI()
             QModelIndex idxType = addrModel->index(row, 0, QModelIndex());
             if (addrModel->data(idxType, AddressTableModel::TypeRole).toString() == AddressTableModel::Receive) {
                 QModelIndex idxAddr = addrModel->index(row, AddressTableModel::Address, QModelIndex());
-                editOwnerAddress->setText(addrModel->data(idxAddr, Qt::DisplayRole).toString());
+                const QString receiveAddress = addrModel->data(idxAddr, Qt::DisplayRole).toString();
+                editOwnerAddress->setText(receiveAddress);
+                editWithdrawDestination->setText(receiveAddress);
                 break;
             }
         }
@@ -169,6 +242,20 @@ void ColdStakingDialog::setupUI()
         tabWidget->setCurrentIndex(1);
     });
     connect(btnSendDelegation, &QPushButton::clicked, this, &ColdStakingDialog::onDelegateClicked);
+    connect(btnRefreshContracts, &QPushButton::clicked, this, &ColdStakingDialog::refreshColdStaking);
+    connect(btnWithdraw, &QPushButton::clicked, this, &ColdStakingDialog::onWithdrawClicked);
+    connect(tabWidget, &QTabWidget::currentChanged, [this](int index) {
+        if (index == 2) refreshColdStaking();
+    });
+    connect(tableContracts, &QTableWidget::itemSelectionChanged, [this]() {
+        const int row = tableContracts->currentRow();
+        if (row < 0) return;
+        const QString address = tableContracts->item(row, 0)->data(Qt::UserRole).toString();
+        const int index = comboWithdrawContract->findData(address);
+        if (index >= 0) comboWithdrawContract->setCurrentIndex(index);
+    });
+
+    refreshColdStaking();
 }
 
 void ColdStakingDialog::onGenerateAddressClicked()
@@ -335,4 +422,149 @@ void ColdStakingDialog::onDelegateClicked()
 
 void ColdStakingDialog::onUseGeneratedAddressClicked()
 {
+}
+
+void ColdStakingDialog::refreshColdStaking()
+{
+    tableContracts->setRowCount(0);
+    comboWithdrawContract->clear();
+    btnWithdraw->setEnabled(false);
+
+    if (!model) return;
+
+    struct ContractSummary {
+        CAmount balance = 0;
+        int outputs = 0;
+        int minConfirmations = 0;
+        bool owner = false;
+        bool staker = false;
+    };
+    std::map<std::string, ContractSummary> contracts;
+    for (const auto& output : model->getColdStakingOutputs()) {
+        const std::string address = EncodeDestination(output.address);
+        ContractSummary& summary = contracts[address];
+        summary.balance += output.amount;
+        summary.outputs++;
+        if (summary.outputs == 1 || output.confirmations < summary.minConfirmations) {
+            summary.minConfirmations = output.confirmations;
+        }
+        summary.owner = summary.owner || output.owner;
+        summary.staker = summary.staker || output.staker;
+    }
+
+    CAmount total = 0;
+    CAmount ownerTotal = 0;
+    CAmount stakerTotal = 0;
+    for (const auto& entry : contracts) {
+        const QString address = QString::fromStdString(entry.first);
+        const ContractSummary& summary = entry.second;
+        const int row = tableContracts->rowCount();
+        tableContracts->insertRow(row);
+
+        QString role = tr("Observed");
+        if (summary.owner && summary.staker) role = tr("Owner + Staker");
+        else if (summary.owner) role = tr("Owner");
+        else if (summary.staker) role = tr("Staker");
+
+        QTableWidgetItem *addressItem = new QTableWidgetItem(address);
+        addressItem->setData(Qt::UserRole, address);
+        tableContracts->setItem(row, 0, addressItem);
+        tableContracts->setItem(row, 1, new QTableWidgetItem(role));
+        tableContracts->setItem(row, 2, new QTableWidgetItem(
+            XPChainUnits::format(XPChainUnits::XPC, summary.balance, false, XPChainUnits::separatorAlways)));
+        tableContracts->setItem(row, 3, new QTableWidgetItem(QString::number(summary.outputs)));
+        tableContracts->setItem(row, 4, new QTableWidgetItem(QString::number(summary.minConfirmations)));
+
+        total += summary.balance;
+        if (summary.owner) {
+            ownerTotal += summary.balance;
+            comboWithdrawContract->addItem(
+                tr("%1 — %2 XPC").arg(address, XPChainUnits::format(XPChainUnits::XPC, summary.balance)),
+                address);
+        }
+        if (summary.staker) stakerTotal += summary.balance;
+    }
+
+    labelContractSummary->setText(
+        tr("Total: %1 XPC  |  Owner: %2 XPC  |  Staking: %3 XPC")
+            .arg(XPChainUnits::format(XPChainUnits::XPC, total),
+                 XPChainUnits::format(XPChainUnits::XPC, ownerTotal),
+                 XPChainUnits::format(XPChainUnits::XPC, stakerTotal)));
+    btnWithdraw->setEnabled(comboWithdrawContract->count() > 0);
+    if (contracts.empty()) {
+        labelWithdrawStatus->setStyleSheet("color: #8b949e;");
+        labelWithdrawStatus->setText(tr("No unspent cold-staking contracts were found in this wallet."));
+    } else {
+        labelWithdrawStatus->clear();
+    }
+}
+
+void ColdStakingDialog::onWithdrawClicked()
+{
+    if (!model || comboWithdrawContract->currentIndex() < 0) return;
+
+    const QString contract = comboWithdrawContract->currentData().toString();
+    const QString destination = editWithdrawDestination->text().trimmed();
+    const QString amountString = editWithdrawAmount->text().trimmed();
+    CAmount amount = 0;
+    if (!model->validateAddress(destination)) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(tr("Enter a valid destination address."));
+        return;
+    }
+    if (!XPChainUnits::parse(XPChainUnits::XPC, amountString, &amount) || amount <= 0) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(tr("Enter a valid withdrawal amount."));
+        return;
+    }
+
+    WalletModel::UnlockContext unlock(model->requestUnlock());
+    if (!unlock.isValid()) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(tr("Wallet unlock cancelled."));
+        return;
+    }
+
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(destination, tr("Cold Staking Withdrawal"), amount, ""));
+    WalletModelTransaction transaction(recipients);
+    int inputCount = 0;
+    const WalletModel::SendCoinsReturn prepared =
+        model->prepareColdStakingWithdrawal(transaction, contract, inputCount);
+    if (prepared.status != WalletModel::OK) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        if (prepared.status == WalletModel::AmountExceedsBalance ||
+            prepared.status == WalletModel::AmountWithFeeExceedsBalance) {
+            labelWithdrawStatus->setText(tr("The selected contract does not have enough owner-controlled funds for the amount and fee."));
+        } else {
+            labelWithdrawStatus->setText(tr("Could not prepare the cold-staking withdrawal."));
+        }
+        return;
+    }
+
+    const QString formattedAmount = XPChainUnits::formatWithUnit(XPChainUnits::XPC, amount);
+    const QString fee = XPChainUnits::formatWithUnit(XPChainUnits::XPC, transaction.getTransactionFee());
+    const QMessageBox::StandardButton confirmation = QMessageBox::question(
+        this, tr("Confirm Cold Staking Withdrawal"),
+        tr("Withdraw %1 from the selected contract?\n\nDestination: %2\nInputs: %3\nTransaction fee: %4\n\n"
+           "Only the owner key can authorize this transaction.")
+            .arg(formattedAmount, destination).arg(inputCount).arg(fee),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (confirmation != QMessageBox::Yes) return;
+
+    const WalletModel::SendCoinsReturn sent = model->sendCoins(transaction);
+    if (sent.status != WalletModel::OK) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(sent.reasonCommitFailed.isEmpty()
+            ? tr("Withdrawal transaction broadcast failed.")
+            : tr("Withdrawal rejected: %1").arg(sent.reasonCommitFailed));
+        return;
+    }
+
+    const QString txid = QString::fromStdString(transaction.getWtx()->get().GetHash().GetHex());
+    labelWithdrawStatus->setStyleSheet("color: #56d364;");
+    labelWithdrawStatus->setText(
+        tr("Withdrawal transaction broadcast successfully. Transaction ID: %1").arg(txid));
+    editWithdrawAmount->clear();
+    refreshColdStaking();
 }

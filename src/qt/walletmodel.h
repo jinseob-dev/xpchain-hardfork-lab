@@ -171,6 +171,13 @@ public:
                                                   const CCoinControl& coinControl,
                                                   int& outputCount);
 
+    // Prepare an owner-authorized withdrawal from one cold-staking contract.
+    SendCoinsReturn prepareColdStakingWithdrawal(WalletModelTransaction &transaction,
+                                                 const QString& contractAddress,
+                                                 int& inputCount);
+
+    std::vector<interfaces::ColdStakingOutput> getColdStakingOutputs() const;
+
     // Send coins to a list of recipients
     SendCoinsReturn sendCoins(WalletModelTransaction &transaction);
 

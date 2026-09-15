@@ -13,6 +13,8 @@ class QLineEdit;
 class QPushButton;
 class QLabel;
 class QTabWidget;
+class QComboBox;
+class QTableWidget;
 
 class ColdStakingDialog : public QDialog
 {
@@ -27,6 +29,8 @@ private Q_SLOTS:
     void onCopyAddressClicked();
     void onDelegateClicked();
     void onUseGeneratedAddressClicked();
+    void refreshColdStaking();
+    void onWithdrawClicked();
 
 private:
     WalletModel *model;
@@ -46,6 +50,16 @@ private:
     QLineEdit *editDelegateAmount;
     QPushButton *btnSendDelegation;
     QLabel *labelDelegateStatus;
+
+    // Tab 3: Monitor and withdraw delegated coins
+    QTableWidget *tableContracts;
+    QComboBox *comboWithdrawContract;
+    QLineEdit *editWithdrawDestination;
+    QLineEdit *editWithdrawAmount;
+    QPushButton *btnRefreshContracts;
+    QPushButton *btnWithdraw;
+    QLabel *labelContractSummary;
+    QLabel *labelWithdrawStatus;
 
     void setupUI();
 };
