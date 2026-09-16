@@ -176,6 +176,16 @@ public:
                                                  const QString& contractAddress,
                                                  int& inputCount);
 
+    // Combine small owner-controlled cold-staking outputs back into the same contract.
+    // Preserve the largest outputs so consolidation does not pause the entire stake.
+    static constexpr int COLD_STAKING_UTXOS_TO_PRESERVE = 20;
+    static constexpr int COLD_STAKING_MAX_CONSOLIDATION_INPUTS = 100;
+    SendCoinsReturn prepareColdStakingConsolidation(WalletModelTransaction &transaction,
+                                                    const QString& contractAddress,
+                                                    int& inputCount,
+                                                    CAmount& inputAmount,
+                                                    CAmount& sponsorAmount);
+
     std::vector<interfaces::ColdStakingOutput> getColdStakingOutputs() const;
 
     // Send coins to a list of recipients

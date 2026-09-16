@@ -65,7 +65,7 @@ class PoSStakingTest(BitcoinTestFramework):
         taproot_blocks = 200
         self.nodes[0].generatetoaddress(taproot_blocks, taproot_address)
         withdrawal_txid = self.check_delegation_split_rpc(contract)
-        remaining = REGTEST_SWITCH_HEIGHT - taproot_blocks
+        remaining = REGTEST_SWITCH_HEIGHT - self.nodes[0].getblockcount()
         while remaining > 0:
             batch = min(remaining, 250)
             self.nodes[0].generatetoaddress(batch, cold_address)
@@ -141,6 +141,37 @@ class PoSStakingTest(BitcoinTestFramework):
         assert_equal(sum(output['value'] for output in swept_destination_outputs),
                      sweep['received_amount'])
         assert_equal(swept_contract_outputs, [])
+
+        # Consolidation combines excess tiny rewards with one established fee
+        # sponsor while leaving the other 19 staking outputs untouched.
+        consolidate_owner = self.nodes[0].getnewaddress('cold consolidate owner', 'bech32')
+        consolidate_contract = self.nodes[0].createcoldstakingaddress(
+            consolidate_owner, contract['staker'])
+        consolidate_options = {
+            'maximum_outputs': 25,
+            'minimum_output_amount': 1,
+        }
+        consolidation_delegation = self.nodes[0].delegatecoldstaking(
+            consolidate_contract['address'], 1000, consolidate_options)
+        assert_equal(consolidation_delegation['output_count'], 25)
+        self.nodes[0].generatetoaddress(1, self.nodes[0].getnewaddress('', 'bech32m'))
+
+        consolidation = self.nodes[0].consolidatecoldstaking(
+            consolidate_contract['address'])
+        assert_equal(consolidation['small_input_count'], 5)
+        assert_equal(consolidation['input_count'], 6)
+        assert_equal(consolidation['untouched_staking_utxos'], 19)
+        assert_equal(consolidation['expected_utxo_count'], 20)
+        assert_equal(consolidation['input_amount'],
+                     consolidation['small_input_amount'] + consolidation['fee_sponsor_amount'])
+        assert_equal(consolidation['output_amount'],
+                     consolidation['input_amount'] - consolidation['fee'])
+        consolidated = self.nodes[0].getrawtransaction(consolidation['txid'], True)
+        consolidated_outputs = [
+            output for output in consolidated['vout']
+            if output['scriptPubKey'].get('addresses') == [consolidate_contract['address']]]
+        assert_equal(len(consolidated_outputs), 1)
+        assert_equal(consolidated_outputs[0]['value'], consolidation['output_amount'])
         return withdrawal['txid']
 
     def check_cold_stake_role_separation(self, contract, withdrawal_txid):
@@ -162,6 +193,10 @@ class PoSStakingTest(BitcoinTestFramework):
             -4, "This wallet does not contain the cold-staking owner key",
             self.nodes[1].withdrawcoldstaking,
             contract['address'], contract['staker'], 1)
+        assert_raises_rpc_error(
+            -4, "This wallet does not contain the cold-staking owner key",
+            self.nodes[1].consolidatecoldstaking,
+            contract['address'])
 
         # The owner withdrawal created before the remaining PoW range was mined must
         # have propagated and become part of the shared chain.
@@ -302,11 +337,12 @@ class PoSStakingTest(BitcoinTestFramework):
         restored_rpc.syncwithvalidationinterfacequeue()
 
         restored_view = restored_rpc.listcoldstaking()
-        assert_greater_than(len(restored_view['outputs']), 0)
-        assert all(output['address'] == contract['address']
-                   for output in restored_view['outputs'])
+        restored_contract_outputs = [
+            output for output in restored_view['outputs']
+            if output['address'] == contract['address']]
+        assert_greater_than(len(restored_contract_outputs), 0)
         assert all(output['owner'] and not output['staker']
-                   for output in restored_view['outputs'])
+                   for output in restored_contract_outputs)
 
     def stake_one_cold_block(self, contract):
         """Stake on node 1, which has only the delegated staking key."""

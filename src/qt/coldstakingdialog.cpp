@@ -32,6 +32,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <map>
 
 ColdStakingDialog::ColdStakingDialog(const PlatformStyle *_platformStyle, WalletModel *_model, QWidget *parent)
@@ -56,6 +57,7 @@ ColdStakingDialog::ColdStakingDialog(const PlatformStyle *_platformStyle, Wallet
       btnRefreshContracts(nullptr),
       btnWithdrawAll(nullptr),
       btnWithdraw(nullptr),
+      btnConsolidate(nullptr),
       labelContractSummary(nullptr),
       labelWithdrawStatus(nullptr)
 {
@@ -170,7 +172,8 @@ void ColdStakingDialog::setupUI()
 
     QLabel *descManage = new QLabel(
         tr("Review the cold-staking contracts known to this wallet. "
-           "Only a wallet marked <b>Owner</b> can withdraw principal; a staking-only wallet cannot spend it."),
+           "Only a wallet marked <b>Owner</b> can withdraw principal or consolidate UTXOs; "
+           "a staking-only wallet cannot spend them."),
         tabManage);
     descManage->setWordWrap(true);
     manageLayout->addWidget(descManage);
@@ -216,8 +219,13 @@ void ColdStakingDialog::setupUI()
     manageLayout->addLayout(formWithdraw);
 
     btnWithdraw = new QPushButton(tr("Withdraw Delegated Coins"), tabManage);
+    btnConsolidate = new QPushButton(tr("Consolidate Small UTXOs"), tabManage);
     btnWithdraw->setEnabled(false);
-    manageLayout->addWidget(btnWithdraw);
+    btnConsolidate->setEnabled(false);
+    QHBoxLayout *manageButtons = new QHBoxLayout();
+    manageButtons->addWidget(btnWithdraw);
+    manageButtons->addWidget(btnConsolidate);
+    manageLayout->addLayout(manageButtons);
 
     labelWithdrawStatus = new QLabel(tabManage);
     labelWithdrawStatus->setWordWrap(true);
@@ -262,6 +270,12 @@ void ColdStakingDialog::setupUI()
             tr("Full withdrawal selected. The network fee will be deducted from the amount received."));
     });
     connect(btnWithdraw, &QPushButton::clicked, this, &ColdStakingDialog::onWithdrawClicked);
+    connect(btnConsolidate, &QPushButton::clicked, this, &ColdStakingDialog::onConsolidateClicked);
+    connect(comboWithdrawContract, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index) {
+        const int outputs = index < 0 ? 0 : comboWithdrawContract->itemData(index, Qt::UserRole + 2).toInt();
+        btnConsolidate->setEnabled(
+            outputs >= WalletModel::COLD_STAKING_UTXOS_TO_PRESERVE + 2);
+    });
     connect(tabWidget, &QTabWidget::currentChanged, [this](int index) {
         if (index == 2) refreshColdStaking();
     });
@@ -470,6 +484,7 @@ void ColdStakingDialog::refreshColdStaking()
     tableContracts->setRowCount(0);
     comboWithdrawContract->clear();
     btnWithdraw->setEnabled(false);
+    btnConsolidate->setEnabled(false);
 
     if (!model) return;
 
@@ -525,6 +540,8 @@ void ColdStakingDialog::refreshColdStaking()
             comboWithdrawContract->setItemData(comboWithdrawContract->count() - 1,
                                                QVariant::fromValue<qlonglong>(summary.balance),
                                                Qt::UserRole + 1);
+            comboWithdrawContract->setItemData(comboWithdrawContract->count() - 1,
+                                               summary.outputs, Qt::UserRole + 2);
         }
         if (summary.staker) stakerTotal += summary.balance;
     }
@@ -535,6 +552,11 @@ void ColdStakingDialog::refreshColdStaking()
                  XPChainUnits::format(XPChainUnits::XPC, ownerTotal),
                  XPChainUnits::format(XPChainUnits::XPC, stakerTotal)));
     btnWithdraw->setEnabled(comboWithdrawContract->count() > 0);
+    const int selectedContract = comboWithdrawContract->currentIndex();
+    const int selectedOutputs = selectedContract < 0 ? 0
+        : comboWithdrawContract->itemData(selectedContract, Qt::UserRole + 2).toInt();
+    btnConsolidate->setEnabled(
+        selectedOutputs >= WalletModel::COLD_STAKING_UTXOS_TO_PRESERVE + 2);
     if (contracts.empty()) {
         labelWithdrawStatus->setStyleSheet("color: #8b949e;");
         labelWithdrawStatus->setText(tr("No unspent cold-staking contracts were found in this wallet."));
@@ -617,5 +639,99 @@ void ColdStakingDialog::onWithdrawClicked()
     labelWithdrawStatus->setText(
         tr("Withdrawal transaction broadcast successfully. Transaction ID: %1").arg(txid));
     editWithdrawAmount->clear();
+    refreshColdStaking();
+}
+
+void ColdStakingDialog::onConsolidateClicked()
+{
+    if (!model || comboWithdrawContract->currentIndex() < 0) return;
+
+    const QString contractAddress = comboWithdrawContract->currentData().toString();
+    const CTxDestination contract = DecodeDestination(contractAddress.toStdString());
+    std::vector<interfaces::ColdStakingOutput> candidates;
+    for (const auto& output : model->getColdStakingOutputs()) {
+        if (output.address == contract && output.owner && output.confirmations > 0) {
+            candidates.push_back(output);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.amount < b.amount;
+    });
+
+    const int excess = static_cast<int>(candidates.size()) -
+        WalletModel::COLD_STAKING_UTXOS_TO_PRESERVE;
+    const int smallInputCount = std::min(
+        excess, WalletModel::COLD_STAKING_MAX_CONSOLIDATION_INPUTS - 1);
+    if (smallInputCount < 2) {
+        labelWithdrawStatus->setStyleSheet("color: #8b949e;");
+        labelWithdrawStatus->setText(
+            tr("Nothing to consolidate. At least %1 confirmed UTXOs are kept available for staking.")
+                .arg(WalletModel::COLD_STAKING_UTXOS_TO_PRESERVE));
+        return;
+    }
+
+    CAmount requestedAmount = 0;
+    for (int i = 0; i < smallInputCount; ++i) requestedAmount += candidates[i].amount;
+    const CAmount requestedSponsorAmount = candidates[excess].amount;
+    requestedAmount += requestedSponsorAmount;
+
+    WalletModel::UnlockContext unlock(model->requestUnlock());
+    if (!unlock.isValid()) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(tr("Wallet unlock cancelled."));
+        return;
+    }
+
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(
+        contractAddress, tr("Cold Staking UTXO Consolidation"), requestedAmount, ""));
+    WalletModelTransaction transaction(recipients);
+    int inputCount = 0;
+    CAmount inputAmount = 0;
+    CAmount sponsorAmount = 0;
+    const WalletModel::SendCoinsReturn prepared = model->prepareColdStakingConsolidation(
+        transaction, contractAddress, inputCount, inputAmount, sponsorAmount);
+    if (prepared.status != WalletModel::OK) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(
+            prepared.status == WalletModel::InvalidAmount
+                ? tr("There are not enough confirmed small UTXOs to consolidate safely.")
+                : tr("Could not prepare the cold-staking consolidation transaction."));
+        return;
+    }
+
+    const CAmount consolidatedAmount = transaction.getRecipients().first().amount;
+    const CAmount smallInputAmount = inputAmount - sponsorAmount;
+    const QString smallTotal = XPChainUnits::formatWithUnit(XPChainUnits::XPC, smallInputAmount);
+    const QString sponsor = XPChainUnits::formatWithUnit(XPChainUnits::XPC, sponsorAmount);
+    const QString total = XPChainUnits::formatWithUnit(XPChainUnits::XPC, inputAmount);
+    const QString result = XPChainUnits::formatWithUnit(XPChainUnits::XPC, consolidatedAmount);
+    const QString fee = XPChainUnits::formatWithUnit(
+        XPChainUnits::XPC, transaction.getTransactionFee());
+    const QMessageBox::StandardButton confirmation = QMessageBox::question(
+        this, tr("Confirm UTXO Consolidation"),
+        tr("Combine %1 small confirmed UTXOs using one established staking UTXO to cover the fee?\n\n"
+           "Small UTXOs: %2\nFee sponsor UTXO: %3\nTotal selected: %4\n"
+           "New contract output: %5\nTransaction fee: %6\n\n"
+           "The other %7 established UTXOs remain untouched. Only the replacement output must mature again before staking.")
+            .arg(inputCount - 1).arg(smallTotal, sponsor, total)
+            .arg(result, fee)
+            .arg(WalletModel::COLD_STAKING_UTXOS_TO_PRESERVE - 1),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (confirmation != QMessageBox::Yes) return;
+
+    const WalletModel::SendCoinsReturn sent = model->sendCoins(transaction);
+    if (sent.status != WalletModel::OK) {
+        labelWithdrawStatus->setStyleSheet("color: #f85149;");
+        labelWithdrawStatus->setText(sent.reasonCommitFailed.isEmpty()
+            ? tr("UTXO consolidation transaction broadcast failed.")
+            : tr("Consolidation rejected: %1").arg(sent.reasonCommitFailed));
+        return;
+    }
+
+    const QString txid = QString::fromStdString(transaction.getWtx()->get().GetHash().GetHex());
+    labelWithdrawStatus->setStyleSheet("color: #56d364;");
+    labelWithdrawStatus->setText(
+        tr("Consolidated %1 UTXOs successfully. Transaction ID: %2").arg(inputCount).arg(txid));
     refreshColdStaking();
 }

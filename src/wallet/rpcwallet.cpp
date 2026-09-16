@@ -5665,6 +5665,118 @@ static UniValue withdrawcoldstaking(const JSONRPCRequest& request)
     return result;
 }
 
+static UniValue consolidatecoldstaking(const JSONRPCRequest& request)
+{
+    static constexpr int UTXOS_TO_PRESERVE = 20;
+    static constexpr int DEFAULT_MAX_INPUTS = 100;
+
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!EnsureWalletIsAvailable(pwallet.get(), request.fHelp)) return NullUniValue;
+    if (request.fHelp || request.params.size() < 1 || request.params.size() > 2) {
+        throw std::runtime_error(
+            "consolidatecoldstaking \"contract_address\" ( max_inputs )\n"
+            "Combine the smallest confirmed owner-controlled outputs into one output in the same "
+            "cold-staking contract. One established output sponsors the fee while 19 remain untouched.\n"
+            + HelpRequiringPassphrase(pwallet.get()));
+    }
+
+    const int maxInputs = request.params.size() > 1
+        ? request.params[1].get_int() : DEFAULT_MAX_INPUTS;
+    if (maxInputs < 2 || maxInputs > DEFAULT_MAX_INPUTS) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "max_inputs must be between 2 and 100");
+    }
+
+    pwallet->BlockUntilSyncedToCurrentChain();
+    LOCK2(cs_main, pwallet->cs_wallet);
+    if (pwallet->GetBroadcastTransactions() && !g_connman) {
+        throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
+    }
+
+    const CTxDestination contract = DecodeDestination(request.params[0].get_str());
+    CScript contractScript;
+    CKeyID stakingKey, ownerKey;
+    if (!IsValidDestination(contract) ||
+        !GetColdStakingContract(pwallet.get(), contract, contractScript, &stakingKey, &ownerKey)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unknown cold-staking contract");
+    }
+    if (!pwallet->HaveKey(ownerKey)) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "This wallet does not contain the cold-staking owner key");
+    }
+    EnsureWalletIsUnlocked(pwallet.get());
+
+    struct Candidate {
+        COutPoint outpoint;
+        CAmount amount;
+    };
+    std::vector<COutput> coins;
+    pwallet->AvailableCoins(coins, true);
+    std::vector<Candidate> candidates;
+    for (const COutput& coin : coins) {
+        if (!coin.tx || !coin.tx->tx || !coin.fSpendable || coin.nDepth <= 0) continue;
+        const CTxOut& output = coin.tx->tx->vout[coin.i];
+        if (output.scriptPubKey == contractScript) {
+            candidates.push_back({COutPoint(coin.tx->GetHash(), coin.i), output.nValue});
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.amount < b.amount;
+    });
+
+    const int excess = static_cast<int>(candidates.size()) - UTXOS_TO_PRESERVE;
+    const int smallInputCount = std::min(excess, maxInputs - 1);
+    if (smallInputCount < 2) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           "Not enough confirmed outputs to consolidate while preserving 20 staking UTXOs");
+    }
+
+    CCoinControl coinControl;
+    coinControl.destChange = contract;
+    coinControl.fAllowOtherInputs = false;
+    CAmount inputAmount = 0;
+    for (int i = 0; i < smallInputCount; ++i) {
+        coinControl.Select(candidates[i].outpoint);
+        inputAmount += candidates[i].amount;
+    }
+    const Candidate& sponsor = candidates[excess];
+    coinControl.Select(sponsor.outpoint);
+    inputAmount += sponsor.amount;
+    const int inputCount = smallInputCount + 1;
+
+    CReserveKey changeKey(pwallet.get());
+    CTransactionRef transaction;
+    CAmount fee = 0;
+    int changePosition = -1;
+    std::string error;
+    std::vector<CRecipient> recipients{{contractScript, inputAmount, true}};
+    if (!pwallet->CreateTransaction(recipients, transaction, changeKey, fee,
+                                    changePosition, error, coinControl)) {
+        throw JSONRPCError(RPC_WALLET_ERROR, error);
+    }
+
+    CValidationState state;
+    mapValue_t metadata;
+    metadata["comment"] = "cold-staking UTXO consolidation";
+    if (!pwallet->CommitTransaction(transaction, std::move(metadata), {}, "", changeKey,
+                                    g_connman.get(), state)) {
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("Transaction commit failed: %s", FormatStateMessage(state)));
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", transaction->GetHash().GetHex());
+    result.pushKV("contract_address", EncodeDestination(contract));
+    result.pushKV("input_count", inputCount);
+    result.pushKV("small_input_count", smallInputCount);
+    result.pushKV("small_input_amount", ValueFromAmount(inputAmount - sponsor.amount));
+    result.pushKV("fee_sponsor_amount", ValueFromAmount(sponsor.amount));
+    result.pushKV("input_amount", ValueFromAmount(inputAmount));
+    result.pushKV("output_amount", ValueFromAmount(inputAmount - fee));
+    result.pushKV("fee", ValueFromAmount(fee));
+    result.pushKV("untouched_staking_utxos", UTXOS_TO_PRESERVE - 1);
+    result.pushKV("expected_utxo_count", static_cast<int>(candidates.size()) - inputCount + 1);
+    return result;
+}
+
 extern UniValue abortrescan(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
@@ -5740,6 +5852,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "delegatecoldstaking",             &delegatecoldstaking,          {"contract_address","amount","options"} },
     { "wallet",             "listcoldstaking",                 &listcoldstaking,              {} },
     { "wallet",             "withdrawcoldstaking",             &withdrawcoldstaking,          {"contract_address","destination_address","amount"} },
+    { "wallet",             "consolidatecoldstaking",          &consolidatecoldstaking,       {"contract_address","max_inputs"} },
 
     /** Account functions (deprecated) */
     { "wallet",             "getaccountaddress",                &getaccountaddress,             {"account"} },

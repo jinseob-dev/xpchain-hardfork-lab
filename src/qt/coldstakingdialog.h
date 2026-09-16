@@ -31,6 +31,7 @@ private Q_SLOTS:
     void onUseGeneratedAddressClicked();
     void refreshColdStaking();
     void onWithdrawClicked();
+    void onConsolidateClicked();
 
 private:
     WalletModel *model;
@@ -59,6 +60,7 @@ private:
     QPushButton *btnRefreshContracts;
     QPushButton *btnWithdrawAll;
     QPushButton *btnWithdraw;
+    QPushButton *btnConsolidate;
     QLabel *labelContractSummary;
     QLabel *labelWithdrawStatus;
 

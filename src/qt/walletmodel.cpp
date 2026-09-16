@@ -367,6 +367,72 @@ WalletModel::SendCoinsReturn WalletModel::prepareColdStakingWithdrawal(
     return AmountWithFeeExceedsBalance;
 }
 
+WalletModel::SendCoinsReturn WalletModel::prepareColdStakingConsolidation(
+    WalletModelTransaction& transaction, const QString& contractAddress,
+    int& inputCount, CAmount& inputAmount, CAmount& sponsorAmount)
+{
+    inputCount = 0;
+    inputAmount = 0;
+    sponsorAmount = 0;
+    const QList<SendCoinsRecipient> recipients = transaction.getRecipients();
+    if (recipients.size() != 1 || recipients.first().address != contractAddress) return InvalidAddress;
+
+    const CTxDestination contract = DecodeDestination(contractAddress.toStdString());
+    if (!IsValidDestination(contract) || !m_wallet->isColdStakingDestination(contract)) return InvalidAddress;
+
+    std::vector<interfaces::ColdStakingOutput> candidates;
+    for (const auto& output : m_wallet->getColdStakingOutputs()) {
+        if (output.address == contract && output.owner && output.confirmations > 0) {
+            candidates.push_back(output);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.amount < b.amount;
+    });
+
+    const int excess = static_cast<int>(candidates.size()) - COLD_STAKING_UTXOS_TO_PRESERVE;
+    const int smallInputCount = std::min(
+        excess, COLD_STAKING_MAX_CONSOLIDATION_INPUTS - 1);
+    if (smallInputCount < 2) {
+        inputCount = 0;
+        return InvalidAmount;
+    }
+
+    CCoinControl coinControl;
+    coinControl.destChange = contract;
+    coinControl.fAllowOtherInputs = false;
+    for (int i = 0; i < smallInputCount; ++i) {
+        coinControl.Select(candidates[i].outpoint);
+        inputAmount += candidates[i].amount;
+    }
+    // Tiny rewards can be worth less than the transaction fee. Include the
+    // smallest of the 20 established staking outputs as a fee sponsor, while
+    // leaving the other 19 untouched and returning all value to the contract.
+    const auto& sponsor = candidates[excess];
+    coinControl.Select(sponsor.outpoint);
+    sponsorAmount = sponsor.amount;
+    inputAmount += sponsorAmount;
+    inputCount = smallInputCount + 1;
+    if (recipients.first().amount != inputAmount) return InvalidAmount;
+
+    std::vector<CRecipient> txRecipients{{GetScriptForDestination(contract), inputAmount, true}};
+    CAmount fee = 0;
+    int changePosition = -1;
+    std::string failureReason;
+    auto& pending = transaction.getWtx();
+    pending = m_wallet->createTransaction(txRecipients, coinControl, true,
+                                           changePosition, fee, failureReason);
+    transaction.setTransactionFee(fee);
+    if (!pending) {
+        Q_EMIT message(tr("Cold Staking"), QString::fromStdString(failureReason),
+                       CClientUIInterface::MSG_ERROR);
+        return TransactionCreationFailed;
+    }
+    if (fee > m_node.getMaxTxFee()) return AbsurdFee;
+    transaction.reassignAmounts(changePosition);
+    return OK;
+}
+
 WalletModel::SendCoinsReturn WalletModel::sendCoins(WalletModelTransaction &transaction)
 {
     QByteArray transaction_array; /* store serialized transaction */
