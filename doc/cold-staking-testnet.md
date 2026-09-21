@@ -6,6 +6,12 @@ Cold staking separates the owner key, which can withdraw funds, from the staking
 key used by an online node. During the testnet phase all rewards return to the
 same cold-staking contract. Operator commission is intentionally disabled.
 
+At testnet height `12000`, cold-staking reward compounding activates. A winning
+contract UTXO is then consumed and recreated once with `principal + reward`
+instead of adding a separate reward UTXO. The number of delegated UTXOs
+therefore stays constant across successful stakes. Outputs created before the
+activation remain valid and are not consolidated automatically.
+
 These wallet policies do not change the consensus minimum stake age or the
 existing reward formula:
 
@@ -66,6 +72,9 @@ P2P propagation and reindex validation, it asserts that:
 - `withdrawcoldstaking` is rejected by the staking wallet;
 - an owner withdrawal uses the empty (`OP_0`) owner-branch selector and confirms;
 - a wallet-file backup restores the cold-staking contract and owner capability.
+- after compounding activation, a delegated stake has no monetary coinbase
+  reward output, increases the recreated contract output by the exact consensus
+  reward, and leaves the contract UTXO count unchanged.
 
 Run it with:
 
@@ -78,7 +87,8 @@ python3 test/functional/test_runner.py feature_pos_staking.py
 The hardfork-lab public testnet uses P2P port `18798`, Bech32 HRP `txpc`, a
 one-hour consensus minimum stake age, and activates Taproot and cold staking
 from genesis. Proof of Stake starts at height `201`, after 200 easy Proof-of-Work
-bootstrap blocks. Its genesis block and network magic are intentionally distinct
+bootstrap blocks. Cold-staking reward compounding activates at height `12000`.
+Its genesis block and network magic are intentionally distinct
 from both mainnet and the retired legacy XPChain testnet. Do not reuse mainnet
 wallet keys or data directories.
 

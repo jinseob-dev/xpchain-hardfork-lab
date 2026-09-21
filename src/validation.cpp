@@ -2025,6 +2025,41 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
 
     CBlockUndo blockundo;
 
+    // From the compounding activation height onward, a delegated coinstake
+    // consumes one contract UTXO and recreates exactly one contract UTXO with
+    // the deterministic reward added. Calculate the only permitted minting
+    // allowance before ordinary input accounting runs.
+    bool fCompoundColdStake = false;
+    CAmount nColdStakeCompoundReward = 0;
+    if (pos::IsPoSHeight(pindex->nHeight, chainparams.GetConsensus()) &&
+        pindex->nHeight >= chainparams.GetConsensus().ColdStakingCompoundHeight &&
+        block.vtx.size() > 1) {
+        CKeyID stakingKey, ownerKey;
+        fCompoundColdStake = pos::IsColdStakingCoinStake(block.vtx[1], stakingKey, ownerKey);
+        if (fCompoundColdStake) {
+            if (block.vtx[1]->vin.size() != 1 || block.vtx[1]->vout.size() != 1) {
+                return state.DoS(100, false, REJECT_INVALID, "bad-coldstake-compound-shape");
+            }
+            const Coin& coin = view.AccessCoin(block.vtx[1]->vin[0].prevout);
+            if (coin.IsSpent()) {
+                return state.DoS(100, false, REJECT_INVALID, "bad-coldstake-compound-input");
+            }
+            const CBlockIndex* stakeOrigin = pindex->pprev->GetAncestor(coin.nHeight);
+            if (!stakeOrigin || block.nTime < stakeOrigin->GetBlockTime()) {
+                return state.DoS(100, false, REJECT_INVALID, "bad-coldstake-compound-age");
+            }
+            nColdStakeCompoundReward = pos::GetProofOfStakeReward(
+                pindex->nHeight, coin.out.nValue,
+                block.nTime - stakeOrigin->GetBlockTime(), chainparams.GetConsensus());
+            if (nColdStakeCompoundReward < 0 ||
+                coin.out.nValue > MAX_MONEY - nColdStakeCompoundReward ||
+                block.vtx[1]->vout[0].nValue != coin.out.nValue + nColdStakeCompoundReward ||
+                block.vtx[1]->vout[0].scriptPubKey != coin.out.scriptPubKey) {
+                return state.DoS(100, false, REJECT_INVALID, "bad-coldstake-compound-value");
+            }
+        }
+    }
+
     CCheckQueueControl<CScriptCheck> control(fScriptChecks && nScriptCheckThreads ? &scriptcheckqueue : nullptr);
 
     std::vector<int> prevheights;
@@ -2043,7 +2078,9 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
         if (!tx.IsCoinBase())
         {
             CAmount txfee = 0;
-            if (!Consensus::CheckTxInputs(tx, state, view, pindex->nHeight, txfee)) {
+            const CAmount nMintAllowance = (i == 1 && fCompoundColdStake)
+                ? nColdStakeCompoundReward : 0;
+            if (!Consensus::CheckTxInputs(tx, state, view, pindex->nHeight, txfee, nMintAllowance)) {
                 return error("%s: Consensus::CheckTxInputs: %s, %s", __func__, tx.GetHash().ToString(), FormatStateMessage(state));
             }
             nFees += txfee;
@@ -2125,12 +2162,24 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
         uint32_t nTime = block.nTime - header.nTime;
 
         blockReward = pos::GetProofOfStakeReward(pindex->nHeight, tx->vout[block.vtx[1]->vin[0].prevout.n].nValue, nTime, chainparams.GetConsensus());
-        if (block.vtx[0]->vout.size() >= 3) {
+        if (fCompoundColdStake) {
+            if (blockReward != nColdStakeCompoundReward) {
+                return state.DoS(100, false, REJECT_INVALID, "bad-coldstake-compound-reward");
+            }
+            if (block.vtx[0]->GetValueOut() != 0) {
+                return state.DoS(100,
+                                 error("%s: compounded cold stake also pays a monetary coinbase", __func__),
+                                 REJECT_INVALID, "bad-coldstake-double-reward");
+            }
+            if (!VerifyCoinBaseTx(block, state, pindex->nHeight, chainparams.GetConsensus())) {
+                return false;
+            }
+        } else if (block.vtx[0]->vout.size() >= 3) {
             if (!VerifyCoinBaseTx(block, state, pindex->nHeight, chainparams.GetConsensus())) {
                 return false;
             }
         }
-        if (1 <= block.vtx[0]->vout.size() && block.vtx[0]->vout.size() <= 2) {
+        if (!fCompoundColdStake && 1 <= block.vtx[0]->vout.size() && block.vtx[0]->vout.size() <= 2) {
             if (block.vtx[0]->vout[0].nValue < blockReward) {
                 return state.DoS(100,
                                  error("%s: coinbase pays too little (actual=%d vs calculated=%d)",

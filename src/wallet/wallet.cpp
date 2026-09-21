@@ -4698,7 +4698,8 @@ void CWallet::GetStakeCandidates(std::vector<pos::StakeCandidate>& vCandidates)
     }
 }
 
-bool CWallet::CreateCoinStake(const pos::StakeCandidate& candidate, CTransactionRef& txNew, CAmount& nFees)
+bool CWallet::CreateCoinStake(const pos::StakeCandidate& candidate, CAmount nCompoundReward,
+                              CTransactionRef& txNew, CAmount& nFees)
 {
     LOCK2(cs_main, cs_wallet);
 
@@ -4726,13 +4727,22 @@ bool CWallet::CreateCoinStake(const pos::StakeCandidate& candidate, CTransaction
         // relay fee and would either reduce the principal or reject a zero fee.
         CMutableTransaction txCoinStake;
         txCoinStake.vin.emplace_back(candidate.outpoint);
-        txCoinStake.vout.emplace_back(candidate.txout.nValue, candidate.txout.scriptPubKey);
+        if (nCompoundReward < 0 || !MoneyRange(nCompoundReward) ||
+            candidate.txout.nValue > MAX_MONEY - nCompoundReward) {
+            return error("%s: Delegated staking reward is out of range", __func__);
+        }
+        txCoinStake.vout.emplace_back(candidate.txout.nValue + nCompoundReward,
+                                     candidate.txout.scriptPubKey);
         if (!SignTransaction(txCoinStake)) {
             return error("%s: Signing delegated stake failed", __func__);
         }
         txNew = MakeTransactionRef(std::move(txCoinStake));
         nFees = 0;
         return true;
+    }
+
+    if (nCompoundReward != 0) {
+        return error("%s: Compound reward supplied for a non-cold stake", __func__);
     }
 
     coin_control.fOverrideFeeRate = true;

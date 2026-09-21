@@ -848,12 +848,27 @@ BOOST_AUTO_TEST_CASE(cold_staking_staker_path_preserves_contract_and_principal)
 
     Consensus::Params consensus = CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus();
     consensus.ColdStakingHeight = 1000;
+    consensus.ColdStakingCompoundHeight = 2000;
     const CTransactionRef coldStake = MakeTransactionRef(spend);
+    CKeyID parsedStakerKey, parsedOwnerKey;
+    BOOST_CHECK(pos::IsColdStakingCoinStake(coldStake, parsedStakerKey, parsedOwnerKey));
+
+    CMutableTransaction ownerBranch = spend;
+    ownerBranch.vin[0].scriptWitness.stack[ownerBranch.vin[0].scriptWitness.stack.size() - 2].clear();
+    BOOST_CHECK(!pos::IsColdStakingCoinStake(MakeTransactionRef(ownerBranch),
+                                             parsedStakerKey, parsedOwnerKey));
+
     const std::vector<std::pair<CScript, CAmount>> protectedReward{{contract, 1 * COIN}};
     const std::vector<std::pair<CScript, CAmount>> redirectedReward{{P2PKH(stakerKey), 1 * COIN}};
     BOOST_CHECK(pos::CheckColdStakingRewardOutputs(coldStake, protectedReward, 1000, consensus));
     BOOST_CHECK(!pos::CheckColdStakingRewardOutputs(coldStake, redirectedReward, 1000, consensus));
     BOOST_CHECK(pos::CheckColdStakingRewardOutputs(coldStake, redirectedReward, 999, consensus));
+    BOOST_CHECK(!pos::CheckColdStakingRewardOutputs(coldStake, protectedReward, 2000, consensus));
+    BOOST_CHECK(pos::CheckColdStakingRewardOutputs(coldStake, {}, 2000, consensus));
+
+    CMutableTransaction compounded = spend;
+    compounded.vout[0].nValue += 1 * COIN;
+    BOOST_CHECK(MutableTransactionSignatureChecker(&compounded, 0, principal).CheckColdStake(coldScript));
 
     CMutableTransaction stolen = spend;
     stolen.vout[0].scriptPubKey = P2PKH(stakerKey);

@@ -347,6 +347,8 @@ class PoSStakingTest(BitcoinTestFramework):
     def stake_one_cold_block(self, contract):
         """Stake on node 1, which has only the delegated staking key."""
         previous_height = self.nodes[0].getblockcount()
+        chain_outputs_before = self.nodes[0].scantxoutset(
+            'start', ['addr({})'.format(contract['address'])])['unspents']
         tip_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time']
         mocktime = tip_time + REGTEST_STAKE_MIN_AGE + 300
         self.mocktime = mocktime
@@ -368,14 +370,22 @@ class PoSStakingTest(BitcoinTestFramework):
         coinstake = block['tx'][1]
         assert_equal(coinstake['vout'][0]['scriptPubKey']['addresses'], [contract['address']])
         reward_outputs = block['tx'][0]['vout'][1:-1]
-        assert reward_outputs
-        for output in reward_outputs:
-            assert_equal(output['scriptPubKey']['addresses'], [contract['address']])
+        # Cold-staking v2 compounds the reward into the recreated contract
+        # output. The coinbase therefore contains only signed metadata and the
+        # witness commitment, both with zero value.
+        assert_equal(reward_outputs, [])
+        assert_equal(block['tx'][0]['vout'][0]['value'], Decimal('0'))
+        assert_equal(block['tx'][0]['vout'][-1]['value'], Decimal('0'))
         witness = coinstake['vin'][0]['txinwitness']
         assert_equal(witness[-2], '01')
         assert_equal(witness[-1], contract['redeemScript'])
         prev = self.nodes[0].getrawtransaction(coinstake['vin'][0]['txid'], True)
-        assert_equal(prev['vout'][coinstake['vin'][0]['vout']]['value'], coinstake['vout'][0]['value'])
+        previous_value = prev['vout'][coinstake['vin'][0]['vout']]['value']
+        assert_greater_than(coinstake['vout'][0]['value'], previous_value)
+
+        chain_outputs_after = self.nodes[0].scantxoutset(
+            'start', ['addr({})'.format(contract['address'])])['unspents']
+        assert_equal(len(chain_outputs_after), len(chain_outputs_before))
         return block_hash
 
     def run_test(self):

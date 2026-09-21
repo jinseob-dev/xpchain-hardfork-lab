@@ -1630,7 +1630,12 @@ bool GenericTransactionSignatureChecker<T>::CheckColdStake(const CScript& script
     uint256 scriptHash;
     CSHA256().Write(scriptCode.data(), scriptCode.size()).Finalize(scriptHash.begin());
     const CScript expectedScript = CScript() << OP_0 << ToByteVector(scriptHash);
-    return txTo->vout[0].scriptPubKey == expectedScript && txTo->vout[0].nValue == amount;
+    // The staking key may only preserve or increase the single output under
+    // the same contract. Ordinary transaction validation prevents an increase
+    // from minting money; after the compounding hardfork, ConnectBlock grants
+    // an exact, independently calculated reward allowance to the block's cold
+    // coinstake transaction.
+    return txTo->vout[0].scriptPubKey == expectedScript && txTo->vout[0].nValue >= amount;
 }
 
 // explicit instantiation

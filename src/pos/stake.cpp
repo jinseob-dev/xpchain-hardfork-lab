@@ -89,7 +89,15 @@ bool IsColdStakingScript(const CScript& script, CKeyID& stakingKeyId, CKeyID& ow
 bool IsColdStakingCoinStake(const CTransactionRef& txCoinStake, CKeyID& stakingKeyId, CKeyID& ownerKeyId)
 {
     if (!txCoinStake || txCoinStake->vin.empty() || txCoinStake->vout.empty() ||
-        txCoinStake->vin[0].scriptWitness.stack.empty()) {
+        txCoinStake->vin[0].scriptWitness.stack.size() < 2) {
+        return false;
+    }
+
+    // Only the delegated staking branch is a coinstake. The empty selector is
+    // the owner's withdrawal branch and must never receive a consensus minting
+    // allowance.
+    const auto& witnessStack = txCoinStake->vin[0].scriptWitness.stack;
+    if (witnessStack[witnessStack.size() - 2] != std::vector<unsigned char>{0x01}) {
         return false;
     }
 
@@ -100,7 +108,7 @@ bool IsColdStakingCoinStake(const CTransactionRef& txCoinStake, CKeyID& stakingK
         return false;
     }
 
-    const std::vector<unsigned char>& rawScript = txCoinStake->vin[0].scriptWitness.stack.back();
+    const std::vector<unsigned char>& rawScript = witnessStack.back();
     const CScript witnessScript(rawScript.begin(), rawScript.end());
     if (!IsColdStakingScript(witnessScript, stakingKeyId, ownerKeyId)) {
         return false;
@@ -122,6 +130,12 @@ bool CheckColdStakingRewardOutputs(const CTransactionRef& txCoinStake,
     CKeyID stakingKey, ownerKey;
     if (!IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
         return true;
+    }
+
+    // V2 compounds the entire reward into the coinstake output. No separate
+    // coinbase reward output, including a zero-valued placeholder, is allowed.
+    if (nHeight >= consensusParams.ColdStakingCompoundHeight) {
+        return rewardValues.empty();
     }
 
     // Cold-staking v1 has no operator commission: every reward output must

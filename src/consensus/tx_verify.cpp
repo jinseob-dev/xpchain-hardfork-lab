@@ -205,7 +205,8 @@ bool CheckTransaction(const CTransaction& tx, CValidationState &state, bool fChe
     return true;
 }
 
-bool Consensus::CheckTxInputs(const CTransaction& tx, CValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
+bool Consensus::CheckTxInputs(const CTransaction& tx, CValidationState& state, const CCoinsViewCache& inputs,
+                              int nSpendHeight, CAmount& txfee, CAmount nMintAllowance)
 {
     // are the actual inputs available?
     if (!inputs.HaveInputs(tx)) {
@@ -233,14 +234,21 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, CValidationState& state, c
         }
     }
 
+    if (nMintAllowance < 0 || !MoneyRange(nMintAllowance) ||
+        nValueIn > MAX_MONEY - nMintAllowance) {
+        return state.DoS(100, false, REJECT_INVALID, "bad-txns-mint-allowance-outofrange");
+    }
+    const CAmount nValueInWithAllowance = nValueIn + nMintAllowance;
+
     const CAmount value_out = tx.GetValueOut();
-    if (nValueIn < value_out) {
+    if (nValueInWithAllowance < value_out) {
         return state.DoS(100, false, REJECT_INVALID, "bad-txns-in-belowout", false,
-            strprintf("value in (%s) < value out (%s)", FormatMoney(nValueIn), FormatMoney(value_out)));
+            strprintf("value in plus mint allowance (%s) < value out (%s)",
+                      FormatMoney(nValueInWithAllowance), FormatMoney(value_out)));
     }
 
     // Tally transaction fees
-    const CAmount txfee_aux = nValueIn - value_out;
+    const CAmount txfee_aux = nValueInWithAllowance - value_out;
     if (!MoneyRange(txfee_aux)) {
         return state.DoS(100, false, REJECT_INVALID, "bad-txns-fee-outofrange");
     }

@@ -137,7 +137,15 @@ static void XPChainMinter(const std::shared_ptr<IStakeableWallet>& wallet)
                     CScript scriptDummy;
                     CAmount nFees;
                     CTransactionRef txCoinStake;
-                    if (!wallet->CreateCoinStake(candidate, txCoinStake, nFees))
+                    CAmount nCompoundReward = 0;
+                    const int nextHeight = pIndexLast->nHeight + 1;
+                    if (candidate.isColdStake &&
+                        nextHeight >= Params().GetConsensus().ColdStakingCompoundHeight) {
+                        nCompoundReward = GetProofOfStakeReward(
+                            nextHeight, candidate.txout.nValue,
+                            nTime - pprevIndex->GetBlockTime(), Params().GetConsensus());
+                    }
+                    if (!wallet->CreateCoinStake(candidate, nCompoundReward, txCoinStake, nFees))
                     {
                         ++diagnosticCoinstakeFailures;
                         continue;

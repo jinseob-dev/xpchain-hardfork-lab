@@ -39,7 +39,8 @@ public:
     virtual std::string GetWalletName() const = 0;
     virtual bool IsLocked() const = 0;
     virtual void GetStakeCandidates(std::vector<StakeCandidate>& vCandidates) = 0;
-    virtual bool CreateCoinStake(const StakeCandidate& candidate, CTransactionRef& txNew, CAmount& nFees) = 0;
+    virtual bool CreateCoinStake(const StakeCandidate& candidate, CAmount nCompoundReward,
+                                 CTransactionRef& txNew, CAmount& nFees) = 0;
     virtual bool SignReward(uint32_t nTime, CTransactionRef txCoinStake,
                             const std::vector<std::pair<CScript, CAmount>>& vValues,
                             CScript& script) const = 0;

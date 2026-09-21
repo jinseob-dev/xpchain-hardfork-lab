@@ -546,11 +546,16 @@ void ColdStakingDialog::refreshColdStaking()
         if (summary.staker) stakerTotal += summary.balance;
     }
 
+    const int compoundHeight = Params().GetConsensus().ColdStakingCompoundHeight;
+    const QString compoundStatus = model->getNumBlocks() + 1 >= compoundHeight
+        ? tr("Automatic reward compounding is active. New staking rewards no longer add contract UTXOs.")
+        : tr("Automatic reward compounding activates at block %1.").arg(compoundHeight);
     labelContractSummary->setText(
-        tr("Total: %1 XPC  |  Owner: %2 XPC  |  Staking: %3 XPC")
+        tr("Total: %1 XPC  |  Owner: %2 XPC  |  Staking: %3 XPC\n%4")
             .arg(XPChainUnits::format(XPChainUnits::XPC, total),
                  XPChainUnits::format(XPChainUnits::XPC, ownerTotal),
-                 XPChainUnits::format(XPChainUnits::XPC, stakerTotal)));
+                 XPChainUnits::format(XPChainUnits::XPC, stakerTotal),
+                 compoundStatus));
     btnWithdraw->setEnabled(comboWithdrawContract->count() > 0);
     const int selectedContract = comboWithdrawContract->currentIndex();
     const int selectedOutputs = selectedContract < 0 ? 0

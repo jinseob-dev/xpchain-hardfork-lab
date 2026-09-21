@@ -749,7 +749,8 @@ public:
     // ── IStakeableWallet interface implementation ──────────────────────────────
     std::string GetWalletName() const override { return GetName(); }
     void GetStakeCandidates(std::vector<pos::StakeCandidate>& vCandidates) override;
-    bool CreateCoinStake(const pos::StakeCandidate& candidate, CTransactionRef& txNew, CAmount& nFees) override;
+    bool CreateCoinStake(const pos::StakeCandidate& candidate, CAmount nCompoundReward,
+                         CTransactionRef& txNew, CAmount& nFees) override;
     bool SignReward(uint32_t nTime, CTransactionRef txCoinStake,
                     const std::vector<std::pair<CScript, CAmount>>& vValues,
                     CScript& script) const override;

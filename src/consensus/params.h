@@ -65,6 +65,8 @@ struct Params {
     int TaprootHeight;
     /** Block height at which delegated cold-staking covenant rules become active */
     int ColdStakingHeight;
+    /** Block height at which delegated staking rewards compound into the staked output */
+    int ColdStakingCompoundHeight;
     /**
      * Minimum blocks including miner confirmation of the total of 2016 blocks in a retargeting period,
      * (nPowTargetTimespan / nPowTargetSpacing) which is also used for BIP9 deployments.

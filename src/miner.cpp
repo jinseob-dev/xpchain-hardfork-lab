@@ -188,6 +188,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     pblock->nBits          = fPoSHeight?nBits:GetNextWorkRequired(pindexPrev, pblock, chainparams.GetConsensus());
 
     CScript scriptPubKey;
+    bool fCompoundColdStake = false;
 
     if(fPoSHeight)
     {
@@ -200,6 +201,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
             return nullptr;
         }
         pblock->vtx[1] = txCoinStake;
+        CKeyID stakingKey, ownerKey;
+        fCompoundColdStake =
+            nHeight >= chainparams.GetConsensus().ColdStakingCompoundHeight &&
+            pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey);
         nBlockTx++;
         scriptPubKey = pblock->vtx[1]->vout[0].scriptPubKey;
         //Correct?
@@ -238,36 +243,56 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
             uint256 hashBlock;
             assert(txCoinStake->vin.size() == 1);
             if (!pwallet->GetPrevTx(txCoinStake->vin[0].prevout.hash, prevTx, hashBlock)) {
+                if (fCompoundColdStake) {
+                    return nullptr;
+                }
                 splitcoinbase = false;
             } else {
                 CBlockIndex* pprevBlockIndex = LookupBlockIndex(hashBlock);
-                CAmount nBlockReward = pos::GetProofOfStakeReward(nHeight, prevTx->vout[txCoinStake->vin[0].prevout.n].nValue, pblock->nTime - pprevBlockIndex->nTime, chainparams.GetConsensus());
-
-                CTxDestination defaultDest;
-                if (!ExtractDestination(scriptPubKey, defaultDest)) {
+                if (!pprevBlockIndex || txCoinStake->vin[0].prevout.n >= prevTx->vout.size()) {
                     return nullptr;
                 }
-                std::vector<std::pair<CTxDestination, int>> rewardPct = pwallet->GetRewardPct(defaultDest);
-                CKeyID stakingKey, ownerKey;
-                if (nHeight >= chainparams.GetConsensus().ColdStakingHeight &&
-                    pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
-                    // Delegated staking rewards remain protected by the same
-                    // owner/staker contract, regardless of local payout settings.
-                    // Operator commission is intentionally not part of the v1
-                    // testnet contract. If introduced later, it must use a new
-                    // versioned script and separately reviewed consensus rules.
-                    rewardPct = {{defaultDest, 100}};
+                CAmount nBlockReward = pos::GetProofOfStakeReward(nHeight, prevTx->vout[txCoinStake->vin[0].prevout.n].nValue, pblock->nTime - pprevBlockIndex->nTime, chainparams.GetConsensus());
+
+                if (fCompoundColdStake) {
+                    const CAmount principal = prevTx->vout[txCoinStake->vin[0].prevout.n].nValue;
+                    if (nBlockReward < 0 || principal > MAX_MONEY - nBlockReward ||
+                        txCoinStake->vout[0].nValue != principal + nBlockReward ||
+                        txCoinStake->vout[0].scriptPubKey != prevTx->vout[txCoinStake->vin[0].prevout.n].scriptPubKey) {
+                        return nullptr;
+                    }
                 }
+
                 std::vector<std::pair<CScript, CAmount>> rewardValue;
-                rewardValue.resize(rewardPct.size());
-                for (size_t i = 0; i < rewardPct.size(); i++) {
-                    rewardValue[i].first = GetScriptForDestination(rewardPct[i].first);
-                    rewardValue[i].second = nBlockReward * rewardPct[i].second / 100;
-                }
-                coinbaseTx.vout.resize(rewardPct.size() + 1);
-                for (size_t i = 0; i < rewardPct.size(); i++) {
-                    coinbaseTx.vout[i + 1].scriptPubKey = rewardValue[i].first;
-                    coinbaseTx.vout[i + 1].nValue = rewardValue[i].second;
+                if (fCompoundColdStake) {
+                    // The reward is already committed to the one-in/one-out
+                    // coinstake. Keep only the signed metadata output here;
+                    // GenerateCoinbaseCommitment appends the zero-valued witness
+                    // commitment below.
+                    coinbaseTx.vout.resize(1);
+                } else {
+                    CTxDestination defaultDest;
+                    if (!ExtractDestination(scriptPubKey, defaultDest)) {
+                        return nullptr;
+                    }
+                    std::vector<std::pair<CTxDestination, int>> rewardPct = pwallet->GetRewardPct(defaultDest);
+                    CKeyID stakingKey, ownerKey;
+                    if (nHeight >= chainparams.GetConsensus().ColdStakingHeight &&
+                        pos::IsColdStakingCoinStake(txCoinStake, stakingKey, ownerKey)) {
+                        // Delegated staking rewards remain protected by the same
+                        // owner/staker contract, regardless of local payout settings.
+                        rewardPct = {{defaultDest, 100}};
+                    }
+                    rewardValue.resize(rewardPct.size());
+                    for (size_t i = 0; i < rewardPct.size(); i++) {
+                        rewardValue[i].first = GetScriptForDestination(rewardPct[i].first);
+                        rewardValue[i].second = nBlockReward * rewardPct[i].second / 100;
+                    }
+                    coinbaseTx.vout.resize(rewardPct.size() + 1);
+                    for (size_t i = 0; i < rewardPct.size(); i++) {
+                        coinbaseTx.vout[i + 1].scriptPubKey = rewardValue[i].first;
+                        coinbaseTx.vout[i + 1].nValue = rewardValue[i].second;
+                    }
                 }
 
                 CScript txSig;
@@ -282,6 +307,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
             splitcoinbase = false;
         }
         if (!splitcoinbase) {
+            // A compounded coinstake has already minted its reward. Falling
+            // back to a monetary coinbase would mint it a second time.
+            if (fCompoundColdStake) {
+                return nullptr;
+            }
             uint256 hashBlock;
             CTransactionRef prevTx;
             if (!GetTransaction(txCoinStake->vin[0].prevout.hash, prevTx, chainparams.GetConsensus(), hashBlock, true)) {

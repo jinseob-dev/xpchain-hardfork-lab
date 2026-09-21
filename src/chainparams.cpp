@@ -85,6 +85,7 @@ public:
         // so the height must stay in the future until the network has upgraded.
         consensus.TaprootHeight = 4200000;
         consensus.ColdStakingHeight = 4200000;
+        consensus.ColdStakingCompoundHeight = 4200000;
         consensus.powLimit = uint256S("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 60;
@@ -205,6 +206,9 @@ public:
         consensus.BIP66Height = 0;
         consensus.TaprootHeight = 0; // Active from genesis on testnet
         consensus.ColdStakingHeight = 0; // Active from genesis on testnet
+        // Keep the existing isolated testnet chain valid and activate automatic
+        // cold-stake compounding at an explicit future height.
+        consensus.ColdStakingCompoundHeight = 12000;
         // This is a new, isolated hardfork-lab testnet. Its genesis target is
         // the same easy target, so the standard testnet difficulty algorithm
         // can create consecutive blocks without an RPC-only override.
@@ -338,6 +342,7 @@ public:
 
         consensus.TaprootHeight = 0; // Active from genesis on regtest
         consensus.ColdStakingHeight = 0; // Active from genesis on regtest
+        consensus.ColdStakingCompoundHeight = 0; // Active from genesis on regtest
 
         // The best chain should have at least this much work.
         consensus.nMinimumChainWork = uint256S("0x00");
